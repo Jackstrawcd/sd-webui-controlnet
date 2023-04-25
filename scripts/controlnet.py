@@ -12,13 +12,14 @@ import gradio as gr
 import numpy as np
 
 from einops import rearrange
-import annotator
-from scripts import global_state, hook, external_code, processor
-importlib.reload(annotator)
+from annotator import annotator_path
+from scripts import global_state, hook, external_code, processor, xyz_grid_support
+importlib.reload(annotator_path)
 importlib.reload(processor)
 importlib.reload(global_state)
 importlib.reload(hook)
 importlib.reload(external_code)
+importlib.reload(xyz_grid_support)
 from scripts.cldm import PlugableControlModel
 from scripts.processor import *
 from scripts.adapter import PlugableAdapter
@@ -30,7 +31,7 @@ from modules.ui_components import FormRow
 import cv2
 from pathlib import Path
 from PIL import Image, ImageFilter, ImageOps
-from scripts.lvminthin import lvmin_thin
+from scripts.lvminthin import lvmin_thin, nake_nms
 from torchvision.transforms import Resize, InterpolationMode, CenterCrop, Compose
 
 gradio_compat = True
@@ -651,6 +652,7 @@ class Script(scripts.Script):
                 x = x[:, :, 0:3]
 
             new_size_is_smaller = (size[0] * size[1]) < (x.shape[0] * x.shape[1])
+            new_size_is_bigger = (size[0] * size[1]) > (x.shape[0] * x.shape[1])
             unique_color_count = np.unique(x.reshape(-1, x.shape[2]), axis=0).shape[0]
             is_one_pixel_edge = False
             is_binary = False
@@ -669,18 +671,20 @@ class Script(scripts.Script):
             elif new_size_is_smaller:
                 interpolation = cv2.INTER_AREA
             else:
-                interpolation = cv2.INTER_CUBIC
+                interpolation = cv2.INTER_CUBIC  # Must be CUBIC because we now use nms. NEVER CHANGE THIS
 
             y = cv2.resize(x, size, interpolation=interpolation)
             if inpaint_mask is not None:
                 inpaint_mask = cv2.resize(inpaint_mask, size, interpolation=interpolation)
 
             if is_binary:
-                m = np.mean(y.astype(np.float32), axis=2).clip(0, 255).astype(np.uint8)
-                y = np.zeros_like(m)
-                y[m > 16] = 255
+                y = np.mean(y.astype(np.float32), axis=2).clip(0, 255).astype(np.uint8)
                 if is_one_pixel_edge:
-                    y = lvmin_thin(y)
+                    y = nake_nms(y)
+                    _, y = cv2.threshold(y, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                    y = lvmin_thin(y, prunings=new_size_is_bigger)
+                else:
+                    _, y = cv2.threshold(y, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
                 y = np.stack([y] * 3, axis=2)
 
             if inpaint_mask is not None:
@@ -883,7 +887,8 @@ class Script(scripts.Script):
                     else:
                         estimation = max(k0, k1) * float(min(raw_H, raw_W))
 
-                    preprocessor_resolution = int(np.ceil(float(estimation) / 64.0)) * 64
+                    preprocessor_resolution = int(np.round(float(estimation) / 64.0)) * 64
+
                     print(f'Pixel Perfect Mode Enabled.')
                     print(f'resize_mode = {str(resize_mode)}')
                     print(f'raw_H = {raw_H}')
