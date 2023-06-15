@@ -10,6 +10,8 @@ from modules.api import api
 
 from scripts import external_code, global_state
 from scripts.processor import preprocessor_sliders_config
+from scripts.logging import logger
+
 
 def encode_to_base64(image):
     if type(image) is str:
@@ -33,19 +35,25 @@ def controlnet_api(_: gr.Blocks, app: FastAPI):
     @app.get("/controlnet/model_list")
     async def model_list():
         up_to_date_model_list = external_code.get_models(update=True)
-        print(up_to_date_model_list)
+        logger.debug(up_to_date_model_list)
         return {"model_list": up_to_date_model_list}
 
     @app.get("/controlnet/module_list")
     async def module_list(alias_names: bool = False):
         _module_list = external_code.get_modules(alias_names)
-        print(_module_list)
+        logger.debug(_module_list)
         
         return {
             "module_list": _module_list,
             "module_detail": external_code.get_modules_detail(alias_names)
         }
+    
+    @app.get("/controlnet/settings")
+    async def settings():
+        max_models_num = external_code.get_max_models_num()
+        return {"control_net_max_models_num":max_models_num}
 
+    cached_cn_preprocessors = global_state.cache_preprocessors(global_state.cn_preprocessor_modules)
     @app.post("/controlnet/detect")
     async def detect(
         controlnet_module: str = Body("none", title='Controlnet Module'),
@@ -56,7 +64,7 @@ def controlnet_api(_: gr.Blocks, app: FastAPI):
     ):
         controlnet_module = global_state.reverse_preprocessor_aliases.get(controlnet_module, controlnet_module)
 
-        if controlnet_module not in global_state.cn_preprocessor_modules:
+        if controlnet_module not in cached_cn_preprocessors:
             raise HTTPException(
                 status_code=422, detail="Module not available")
 
@@ -64,11 +72,11 @@ def controlnet_api(_: gr.Blocks, app: FastAPI):
             raise HTTPException(
                 status_code=422, detail="No image selected")
 
-        print(f"Detecting {str(len(controlnet_input_images))} images with the {controlnet_module} module.")
+        logger.info(f"Detecting {str(len(controlnet_input_images))} images with the {controlnet_module} module.")
 
         results = []
 
-        processor_module = global_state.cn_preprocessor_modules[controlnet_module]
+        processor_module = cached_cn_preprocessors[controlnet_module]
 
         for input_image in controlnet_input_images:
             img = external_code.to_base64_nparray(input_image)
