@@ -14,8 +14,11 @@ def safer_memory(x):
     return np.ascontiguousarray(x.copy()).copy()
 
 
-def resize_image_with_pad(input_image, resolution):
-    img = HWC3(input_image)
+def resize_image_with_pad(input_image, resolution, skip_hwc3=False):
+    if skip_hwc3:
+        img = input_image
+    else:
+        img = HWC3(input_image)
     H_raw, W_raw, _ = img.shape
     k = float(resolution) / float(min(H_raw, W_raw))
     interpolation = cv2.INTER_CUBIC if k > 1 else cv2.INTER_AREA
@@ -340,12 +343,14 @@ def clip(img, res=512, **kwargs):
     if clip_encoder is None:
         from annotator.clip import apply_clip
         clip_encoder = apply_clip
-    result = clip_encoder(img).squeeze(0)
+    result = clip_encoder(img)
     return result, False
 
 
 def clip_vision_visualization(x):
-    return np.ndarray((x.shape[0] * 4, x.shape[1]), dtype="uint8", buffer=x.detach().cpu().numpy().tobytes())
+    x = x.detach().cpu().numpy()[0]
+    x = np.ascontiguousarray(x).copy()
+    return np.ndarray((x.shape[0] * 4, x.shape[1]), dtype="uint8", buffer=x.tobytes())
 
 
 def unload_clip():
@@ -463,6 +468,43 @@ def unload_lineart_anime_denoise():
         model_manga_line.unload_model()
 
 
+model_lama = None
+
+
+def lama_inpaint(img, res=512, **kwargs):
+    H, W, C = img.shape
+    raw_color = img[:, :, 0:3].copy()
+    raw_mask = img[:, :, 3:4].copy()
+
+    res = 256  # Always use 256 since lama is trained on 256
+
+    img_res, remove_pad = resize_image_with_pad(img, res, skip_hwc3=True)
+
+    global model_lama
+    if model_lama is None:
+        from annotator.lama import LamaInpainting
+        model_lama = LamaInpainting()
+
+    # applied auto inversion
+    prd_color = model_lama(img_res)
+    prd_color = remove_pad(prd_color)
+    prd_color = cv2.resize(prd_color, (W, H))
+
+    alpha = raw_mask.astype(np.float32) / 255.0
+    fin_color = prd_color.astype(np.float32) * alpha + raw_color.astype(np.float32) * (1 - alpha)
+    fin_color = fin_color.clip(0, 255).astype(np.uint8)
+
+    result = np.concatenate([fin_color, raw_mask], axis=2)
+
+    return result, True
+
+
+def unload_lama_inpaint():
+    global model_lama
+    if model_lama is not None:
+        model_lama.unload_model()
+
+
 model_zoe_depth = None
 
 
@@ -563,6 +605,7 @@ flag_preprocessor_resolution = "Preprocessor Resolution"
 preprocessor_sliders_config = {
     "none": [],
     "inpaint": [],
+    "inpaint_only": [],
     "canny": [
         {
             "name": flag_preprocessor_resolution,
@@ -759,6 +802,33 @@ preprocessor_sliders_config = {
             "step": 0.01
         }
     ],
+    "tile_colorfix": [
+        None,
+        {
+            "name": "Variation",
+            "value": 8.0,
+            "min": 3.0,
+            "max": 32.0,
+            "step": 1.0
+        }
+    ],
+    "tile_colorfix+sharp": [
+        None,
+        {
+            "name": "Variation",
+            "value": 8.0,
+            "min": 3.0,
+            "max": 32.0,
+            "step": 1.0
+        },
+        {
+            "name": "Sharpness",
+            "value": 1.0,
+            "min": 0.0,
+            "max": 2.0,
+            "step": 0.01
+        }
+    ],
     "reference_only": [
         None,
         {
@@ -789,6 +859,7 @@ preprocessor_sliders_config = {
             "step": 0.01
         }
     ],
+    "inpaint_only+lama": [],
     "color": [
         {
             "name": flag_preprocessor_resolution,
@@ -819,4 +890,23 @@ preprocessor_sliders_config = {
             "step": 0.01
         }
     ],
+}
+
+preprocessor_filters = {
+    "All": "none",
+    "Canny": "canny",
+    "Depth": "depth_midas",
+    "Normal": "normal_bae",
+    "OpenPose": "openpose_full",
+    "MLSD": "mlsd",
+    "Lineart": "lineart_standard (from white bg & black line)",
+    "SoftEdge": "softedge_pidinet",
+    "Scribble": "scribble_pidinet",
+    "Seg": "seg_ofade20k",
+    "Shuffle": "shuffle",
+    "Tile": "tile_resample",
+    "Inpaint": "inpaint_only",
+    "IP2P": "none",
+    "Reference": "reference_only",
+    "T2IA": "none",
 }
