@@ -6,10 +6,14 @@ if not models_path:
     models_path = getattr(shared.cmd_opts, 'controlnet_annotator_models_path', None)
 if os.path.isdir('models/ControlNetAnnotator'):
     models_path = 'models/ControlNetAnnotator'
+if os.path.isdir('/data/apksamba/sd/models/ControlNetAnnotator'):
+    models_path = '/data/apksamba/sd/models/ControlNetAnnotator'
 if not models_path:
     models_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'downloads')
 if os.path.isdir('models/ControlNetAnnotator/clip_vision'):
     clip_vision_path = 'models/ControlNetAnnotator/clip_vision'
+elif os.path.isdir('/data/apksamba/sd/models/ControlNetAnnotator/clip_vision'):
+    clip_vision_path = '/data/apksamba/sd/models/ControlNetAnnotator/clip_vision'
 else:
     clip_vision_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'clip_vision')
 # clip vision is always inside controlnet "extensions\sd-webui-controlnet"
