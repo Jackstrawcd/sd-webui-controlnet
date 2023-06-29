@@ -7,7 +7,7 @@ import importlib
 import modules.scripts as scripts
 from modules import shared, devices, script_callbacks, processing, masking, images
 import gradio as gr
-
+import logging
 from einops import rearrange
 from scripts import global_state, hook, external_code, processor, batch_hijack, controlnet_version, utils
 
@@ -308,8 +308,8 @@ class Script(scripts.Script):
             network_config = shared.opts.data.get("control_net_model_adapter_config", global_state.default_conf_adapter)
             if not os.path.isabs(network_config):
                 network_config = os.path.join(global_state.script_dir, network_config)
-            if not os.path.isfile(network_config):
-                network_config = os.path.join(global_state.script_dir, global_state.default_conf)
+        if not os.path.isfile(network_config):
+            network_config = os.path.join(global_state.script_dir, global_state.default_conf)
 
         model_path = os.path.abspath(model_path)
         model_stem = Path(model_path).stem
