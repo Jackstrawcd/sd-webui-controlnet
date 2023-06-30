@@ -599,10 +599,9 @@ class Script(scripts.Script):
             else:
                 input_image = HWC3(np.asarray(p_input_image))
         elif image is not None:
-            if image.get('mask'):
-                while len(image['mask'].shape) < 3:
-                    image['mask'] = image['mask'][..., np.newaxis]
-
+            while len(image['mask'].shape) < 3:
+                image['mask'] = image['mask'][..., np.newaxis]
+                
             # Need to check the image for API compatibility
             if isinstance(image['image'], str):
                 from modules.api.api import decode_base64_to_image
