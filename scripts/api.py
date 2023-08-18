@@ -9,7 +9,7 @@ from modules.api.models import *
 from modules.api import api
 
 from scripts import external_code, global_state
-from scripts.processor import preprocessor_sliders_config
+from scripts.processor import preprocessor_filters
 from scripts.logging import logger
 
 
@@ -33,8 +33,8 @@ def controlnet_api(_: gr.Blocks, app: FastAPI):
         return {"version": external_code.get_api_version()}
 
     @app.get("/controlnet/model_list")
-    async def model_list():
-        up_to_date_model_list = external_code.get_models(update=True)
+    async def model_list(update: bool = True):
+        up_to_date_model_list = external_code.get_models(update=update)
         logger.debug(up_to_date_model_list)
         return {"model_list": up_to_date_model_list}
 
@@ -48,6 +48,29 @@ def controlnet_api(_: gr.Blocks, app: FastAPI):
             "module_detail": external_code.get_modules_detail(alias_names)
         }
     
+    @app.get("/controlnet/control_types")
+    async def control_types():
+        def format_control_type(
+            filtered_preprocessor_list,
+            filtered_model_list,
+            default_option,
+            default_model,
+        ):
+            return {
+                "module_list": filtered_preprocessor_list,
+                "model_list": filtered_model_list,
+                "default_option": default_option,
+                "default_model": default_model,
+            }
+        
+        return {
+            'control_types': {
+                control_type: format_control_type(*global_state.select_control_type(control_type))
+                for control_type in preprocessor_filters.keys()
+            }
+        }
+
+
     @app.get("/controlnet/settings")
     async def settings():
         max_models_num = external_code.get_max_models_num()

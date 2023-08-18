@@ -9,7 +9,7 @@ from scripts.processor import *
 from scripts.utils import ndarray_lru_cache
 from scripts.logging import logger
 
-from typing import Dict, Callable, Optional
+from typing import Dict, Callable, Optional, Tuple, List
 
 CN_MODEL_EXTS = [".pt", ".pth", ".ckpt", ".safetensors"]
 cn_models_dir = os.path.join(models_path, "ControlNet")
@@ -20,7 +20,7 @@ cn_models_names = {}  # "my_lora" -> "My_Lora(abcd1234)"
 def cache_preprocessors(preprocessor_modules: Dict[str, Callable]) -> Dict[str, Callable]:
     """ We want to share the preprocessor results in a single big cache, instead of a small 
      cache for each preprocessor function. """
-    CACHE_SIZE = shared.cmd_opts.controlnet_preprocessor_cache_size
+    CACHE_SIZE = getattr(shared.cmd_opts, "controlnet_preprocessor_cache_size", 0)
 
     # Set CACHE_SIZE = 0 will completely remove the caching layer. This can be 
     # helpful when debugging preprocessor code.
@@ -62,6 +62,7 @@ cn_preprocessor_modules = {
     "openpose_face": functools.partial(g_openpose_model.run_model, include_body=True, include_hand=False, include_face=True),
     "openpose_faceonly": functools.partial(g_openpose_model.run_model, include_body=False, include_hand=False, include_face=True),
     "openpose_full": functools.partial(g_openpose_model.run_model, include_body=True, include_hand=True, include_face=True),
+    "dw_openpose_full": functools.partial(g_openpose_model.run_model, include_body=True, include_hand=True, include_face=True, use_dw_pose=True),
     "clip_vision": clip,
     "color": color,
     "pidinet": pidinet,
@@ -107,6 +108,7 @@ cn_preprocessor_unloadable = {
     "openpose_hand": g_openpose_model.unload,
     "openpose_face": g_openpose_model.unload,
     "openpose_full": g_openpose_model.unload,
+    "dw_openpose_full": g_openpose_model.unload,
     "segmentation": unload_uniformer,
     "depth_zoe": unload_zoe_depth,
     "normal_bae": unload_normal_bae,
@@ -153,17 +155,17 @@ def get_module_basename(module: Optional[str]) -> str:
 
 default_conf = os.path.join("models", "cldm_v15.yaml")
 default_conf_adapter = os.path.join("models", "t2iadapter_sketch_sd14v1.yaml")
-cn_detectedmap_dir = os.path.join("detected_maps")
-default_detectedmap_dir = cn_detectedmap_dir
+default_detectedmap_dir = os.path.join("detected_maps")
 script_dir = scripts.basedir()
 
 os.makedirs(cn_models_dir, exist_ok=True)
-os.makedirs(cn_detectedmap_dir, exist_ok=True)
-
 
 def traverse_all_files(curr_path, model_list):
-    f_list = [(os.path.join(curr_path, entry.name), entry.stat())
-              for entry in os.scandir(curr_path)]
+    f_list = [
+        (os.path.join(curr_path, entry.name), entry.stat())
+        for entry in os.scandir(curr_path)
+        if os.path.isdir(curr_path)
+    ]
     for f_info in f_list:
         fname, fstat = f_info
         if os.path.splitext(fname)[1] in CN_MODEL_EXTS:
@@ -222,3 +224,47 @@ def update_cn_models():
             continue
         name = os.path.splitext(os.path.basename(filename))[0].lower()
         cn_models_names[name] = name_and_hash
+
+
+def select_control_type(control_type: str) -> Tuple[List[str], List[str], str, str]:
+    default_option = preprocessor_filters[control_type]
+    pattern = control_type.lower()
+    preprocessor_list = ui_preprocessor_keys
+    model_list = list(cn_models.keys())
+    if pattern == "all":
+        return [
+            preprocessor_list,
+            model_list,
+            'none', #default option
+            "None"  #default model 
+        ]
+    filtered_preprocessor_list = [
+        x
+        for x in preprocessor_list
+        if pattern in x.lower() or x.lower() == "none"
+    ]
+    if pattern in ["canny", "lineart", "scribble", "mlsd"]:
+        filtered_preprocessor_list += [
+            x for x in preprocessor_list if "invert" in x.lower()
+        ]
+    filtered_model_list = [
+        x for x in model_list if pattern in x.lower() or x.lower() == "none"
+    ]
+    if default_option not in filtered_preprocessor_list:
+        default_option = filtered_preprocessor_list[0]
+    if len(filtered_model_list) == 1:
+        default_model = "None"
+        filtered_model_list = model_list
+    else:
+        default_model = filtered_model_list[1]
+        for x in filtered_model_list:
+            if "11" in x.split("[")[0]:
+                default_model = x
+                break
+    
+    return (
+        filtered_preprocessor_list,
+        filtered_model_list, 
+        default_option,
+        default_model
+    )
