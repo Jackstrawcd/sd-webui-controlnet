@@ -10,6 +10,7 @@ from scripts import (
     external_code,
     processor,
     batch_hijack,
+    tss,
 )
 from scripts.processor import (
     preprocessor_sliders_config,
@@ -456,6 +457,15 @@ class ControlNetUiGroup(object):
 
     def register_refresh_all_models(self):
         def refresh_all_models(*inputs):
+            # 分离版本支持
+            if tss.enable():
+                models = tss.request_models()
+                dd = inputs[0]
+                selected = dd if dd in models else "None"
+                return gr.Dropdown.update(
+                    value=selected, choices=models.keys()
+                )
+
             global_state.update_cn_models()
 
             dd = inputs[0]
@@ -559,6 +569,27 @@ class ControlNetUiGroup(object):
                 return (
                     gr.update(value=None, visible=True), 
                     gr.update(), 
+                    *self.openpose_editor.update(''),
+                )
+            # tss插件可用
+            if tss.enable():
+                from PIL import Image
+                image_file = tss.run_annotator(image, module, pres, pthr_a, pthr_b, t2i_w, t2i_h, pp, rm)
+                if not image_file:
+                    return (
+                        gr.update(value=None, visible=True),
+                        gr.update(),
+                        *self.openpose_editor.update(''),
+                    )
+
+                result = np.array(Image.open(image_file))
+                result = external_code.visualize_inpaint_mask(result)
+                return (
+                    # Update to `generated_image`
+                    gr.update(value=result, visible=True, interactive=False),
+                    # preprocessor_preview
+                    gr.update(value=True),
+                    # openpose editor
                     *self.openpose_editor.update(''),
                 )
 
