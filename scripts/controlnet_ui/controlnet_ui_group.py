@@ -271,6 +271,7 @@ class ControlNetUiGroup(object):
                 label="Low VRAM",
                 value=self.default_unit.low_vram,
                 elem_id=f"{elem_id_tabname}_{tabname}_controlnet_low_vram_checkbox",
+                min_width="auto"
             )
             self.pixel_perfect = gr.Checkbox(
                 label="Pixel Perfect",
