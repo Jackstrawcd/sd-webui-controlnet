@@ -16,6 +16,7 @@ from PIL import Image
 from io import BytesIO
 from modules.shared import opts, cmd_opts
 from scripts import global_state
+from urllib.parse import urlparse
 
 HOST = os.getenv('TSS_HOST', 'https://draw-plus-backend-qa.xingzheai.cn/').rstrip('/')
 BUCKET = getattr(opts, "xz_bucket", os.getenv('StorageBucket', 'xingzheaidraw'))
@@ -123,53 +124,30 @@ def headers():
 
 def upload_image_data(image_data: Image, persistent=False):
     filename = f'{uuid.uuid4()}.png'
-    full = os.path.join('tmp', filename)
-    image_data.save(full, format="PNG")
-    # with open(full, 'wb+') as output_bytes:
-    #     image_data.save(output_bytes, format="PNG")
-    #
-    #     data = {
-    #         'filename':  filename,
-    #         'file_size': os.path.getsize(full),
-    #         'persistent': persistent
-    #     }
-    #     output_bytes.seek(0)
-    #     resp = requests.post(HOST+'/v1/oss-files', json=data, timeout=4, headers=headers())
-    #     if resp:
-    #         json_d = resp.json()
-    #         if json_d['code'] == 200:
-    #             data = json_d['data']
-    #             resp2 = requests.put(data['url'], headers={
-    #                 'Content-Type': 'image/png'
-    #             }, files={filename: output_bytes})
-    #             if resp2:
-    #                 return data['oss_key']
-    #             else:
-    #                 print(resp2.text)
-    #         else:
-    #             print(resp.text)
-    data = {
-        'filename': filename,
-        'file_size': os.path.getsize(full),
-        'persistent': persistent
-    }
 
-    resp = requests.post(HOST + '/v1/oss-files', json=data, timeout=4, headers=headers())
-    if resp:
-        json_d = resp.json()
-        if json_d['code'] == 200:
-            data = json_d['data']
-            resp2 = requests.put(data['url'], headers={
-                'Content-Type': 'image/png'
-            }, files={filename: open(full, 'rb')})
-            if resp2:
-                return data['oss_key']
+    with BytesIO() as output_bytes:
+        image_data.save(output_bytes, format="PNG")
+        bytes_data = output_bytes.getvalue()
+        data = {
+            'filename':  filename,
+            'file_size': len(bytes_data),
+            'persistent': persistent
+        }
+
+        resp = requests.post(HOST+'/v1/oss-files', json=data, timeout=4, headers=headers())
+        if resp:
+            json_d = resp.json()
+            if json_d['code'] == 200:
+                data = json_d['data']
+                resp2 = requests.put(data['url'], headers={
+                    'Content-Type': 'image/png'
+                }, data=bytes_data)
+                if resp2:
+                    return data['oss_key']
+                else:
+                    print(resp2.text)
             else:
-                print(resp2.text)
-        else:
-            print(resp.text)
-
-
+                print(resp.text)
 
 
 def waite_task(task_id, timeout=300):
@@ -212,12 +190,13 @@ def run_annotator(image, module, pres, pthr_a, pthr_b, t2i_w, t2i_h, pp, rm):
         if json_d['code'] == 200:
             res = waite_task(json_d['data']['task_id'])
             if res:
-                low_images = res['low_images']
-                if low_images:
-                    image_url = low_images[0]
+                images = res.get('hig_images') or res.get('images')
+                if images:
+                    image_url = images[0]
                     resp = requests.get(image_url, timeout=10)
                     if resp:
-                        filename = os.path.join('tmp', os.path.basename(res['low_keys'][0]))
+                        pr = urlparse(image_url)
+                        filename = os.path.join('tmp', os.path.basename(pr.path))
                         with open(filename, "wb+") as f:
                             f.write(resp.content)
 

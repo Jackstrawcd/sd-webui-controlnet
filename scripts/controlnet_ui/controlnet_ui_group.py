@@ -1,3 +1,5 @@
+import os
+
 import gradio as gr
 import functools
 from typing import List, Optional, Union, Dict, Callable
@@ -584,6 +586,9 @@ class ControlNetUiGroup(object):
 
                 result = np.array(Image.open(image_file))
                 result = external_code.visualize_inpaint_mask(result)
+                # 删除临时文件
+                os.remove(image_file)
+
                 return (
                     # Update to `generated_image`
                     gr.update(value=result, visible=True, interactive=False),
