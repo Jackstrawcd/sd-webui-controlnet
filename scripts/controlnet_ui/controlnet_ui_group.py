@@ -462,11 +462,13 @@ class ControlNetUiGroup(object):
         def refresh_all_models(*inputs):
             # 分离版本支持
             if tss.enable():
+                global_state.cn_models.clear()
                 models = tss.request_models()
+                global_state.cn_models.update(models)
                 dd = inputs[0]
                 selected = dd if dd in models else "None"
                 return gr.Dropdown.update(
-                    value=selected, choices=models.keys()
+                    value=selected, choices=list(global_state.cn_models.keys())
                 )
 
             global_state.update_cn_models()

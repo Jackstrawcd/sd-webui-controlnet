@@ -77,7 +77,11 @@ def request_models():
 
     if not data:
         raise Exception('request tss failed')
-    return dict((item['display_value'], item['real_value']) for item in data['items']['4'])
+    d = dict((item['display_value'], item['real_value']) for item in data['items']['4'])
+    if '无' in d:
+        del d['无']
+    d.update({"None": None})
+    return d
 
 
 def preprocess_hooker():
