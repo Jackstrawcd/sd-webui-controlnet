@@ -84,37 +84,47 @@ def request_models():
     return d
 
 
+def set_ui_preprocessors(tss):
+    global_state.ui_preprocessor_keys.clear()
+
+    if tss:
+        tss_processors = request_mudules()
+        for p in tss_processors:
+            if p == 'None':
+                p = 'none'
+            global_state.ui_preprocessor_keys.append(p)
+    else:
+
+        global_state.ui_preprocessor_keys.extend(['none', global_state.preprocessor_aliases['invert']])
+        global_state.ui_preprocessor_keys += sorted([global_state.preprocessor_aliases.get(k, k)
+                                                     for k in global_state.cn_preprocessor_modules.keys()
+                                                     if global_state.preprocessor_aliases.get(k, k)
+                                                     not in global_state.ui_preprocessor_keys])
+
+
+def set_ui_models(tss):
+    if not tss:
+        global_state.update_cn_models()
+    else:
+        global_state.cn_models.clear()
+        models = request_models()
+        global_state.cn_models.update(models)
+
+
+def init_tss_ui():
+    if enable() and not cache.get('init', 0):
+        print('request tss controlnet preprocess and models...')
+        set_ui_preprocessors(True)
+        set_ui_models(True)
+        cache['init'] = 1
+
+
 def preprocess_hooker():
     #
     # cache['ui_preprocessor_keys'] = [x for x in global_state.ui_preprocessor_keys]
     callbacks = getattr(opts, 'xz_ext_callbacks', []) or []
 
-    def set_ui_proprocessors(tss):
-        global_state.ui_preprocessor_keys.clear()
-
-        if tss:
-            tss_processors = request_mudules()
-            for p in tss_processors:
-                if p == 'None':
-                    p = 'none'
-                global_state.ui_preprocessor_keys.append(p)
-        else:
-
-            global_state.ui_preprocessor_keys.extend(['none', global_state.preprocessor_aliases['invert']])
-            global_state.ui_preprocessor_keys += sorted([global_state.preprocessor_aliases.get(k, k)
-                                                         for k in global_state.cn_preprocessor_modules.keys()
-                                                         if global_state.preprocessor_aliases.get(k, k)
-                                                         not in global_state.ui_preprocessor_keys])
-
-    def set_ui_models(tss):
-        if not tss:
-            global_state.update_cn_models()
-        else:
-            global_state.cn_models.clear()
-            models = request_models()
-            global_state.cn_models.update(models)
-
-    callbacks.append(set_ui_proprocessors)
+    callbacks.append(set_ui_preprocessors)
     callbacks.append(set_ui_models)
     setattr(opts, 'xz_ext_callbacks', callbacks)
 

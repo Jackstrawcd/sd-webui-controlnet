@@ -30,6 +30,7 @@ from pathlib import Path
 from PIL import Image, ImageFilter, ImageOps
 from scripts.lvminthin import lvmin_thin, nake_nms
 from scripts.processor import model_free_preprocessors
+from scripts import tss
 
 gradio_compat = True
 try:
@@ -267,6 +268,10 @@ class Script(scripts.Script, metaclass=(
         controls = ()
         max_models = shared.opts.data.get("control_net_max_models_num", 1)
         elem_id_tabname = ("img2img" if is_img2img else "txt2img") + "_controlnet"
+
+        # TSS UI数据修改
+        tss.init_tss_ui()
+
         with gr.Group(elem_id=elem_id_tabname):
             with gr.Accordion(f"ControlNet {controlnet_version.version_flag}", open = False, elem_id="controlnet"):
                 if max_models > 1:
