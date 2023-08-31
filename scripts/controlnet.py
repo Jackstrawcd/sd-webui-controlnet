@@ -321,6 +321,12 @@ class Script(scripts.Script, metaclass=(
             raise RuntimeError(f"You have not selected any ControlNet Model.")
 
         model_path = global_state.cn_models.get(model, None)
+        # 尽量查找model path， tss没有[hash]直接get会返回none
+        if not model_path:
+            for k, v in global_state.cn_models.items():
+                if str(k).startswith(model):
+                    model_path = v
+                    break
         if model_path is None:
             model = find_closest_lora_model_name(model)
             model_path = global_state.cn_models.get(model, None)

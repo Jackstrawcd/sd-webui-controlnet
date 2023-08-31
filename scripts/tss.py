@@ -184,6 +184,7 @@ def run_annotator(image, module, pres, pthr_a, pthr_b, t2i_w, t2i_h, pp, rm):
     mask_key = upload_image_data(Image.fromarray(image['mask']))
 
     if not image_key or not mask_key:
+        print("upload image file failed")
         raise Exception('upload image file failed')
 
     data = {
@@ -211,6 +212,10 @@ def run_annotator(image, module, pres, pthr_a, pthr_b, t2i_w, t2i_h, pp, rm):
                     resp = requests.get(image_url, timeout=10)
                     if resp:
                         pr = urlparse(image_url)
+                        if not pr.path:
+                            print(f"cannot get image name:{image_url}")
+                            return ''
+
                         filename = os.path.join('tmp', os.path.basename(pr.path))
                         with open(filename, "wb+") as f:
                             f.write(resp.content)
