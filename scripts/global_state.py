@@ -226,6 +226,17 @@ def update_cn_models():
         cn_models_names[name] = name_and_hash
 
 
+def find_default_model(filtered_model_list):
+    '''
+    从filter model 列表中找到默认的模型优先非None
+    '''
+    for m in filtered_model_list:
+        if m.lower() == "none":
+            continue
+        return m
+    return 'None'
+
+
 def select_control_type(control_type: str) -> Tuple[List[str], List[str], str, str]:
     default_option = preprocessor_filters[control_type]
     pattern = control_type.lower()
@@ -256,7 +267,7 @@ def select_control_type(control_type: str) -> Tuple[List[str], List[str], str, s
         default_model = "None"
         filtered_model_list = model_list
     else:
-        default_model = filtered_model_list[1]
+        default_model = find_default_model(filtered_model_list)
         for x in filtered_model_list:
             if "11" in x.split("[")[0]:
                 default_model = x

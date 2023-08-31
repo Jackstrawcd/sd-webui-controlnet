@@ -196,7 +196,8 @@ def run_annotator(image, module, pres, pthr_a, pthr_b, t2i_w, t2i_h, pp, rm):
         't2i_w': t2i_w,
         't2i_h': t2i_h,
         'pp': pp,
-        'rm': rm
+        'rm': rm,
+        'user_id': 'SD-PLUS-'
     }
     resp = requests.post(HOST + '/v1/img2img-tasks/cnet', json=data, timeout=4, headers=headers())
     if resp:
@@ -215,6 +216,8 @@ def run_annotator(image, module, pres, pthr_a, pthr_b, t2i_w, t2i_h, pp, rm):
                             f.write(resp.content)
 
                         return filename
+                elif res.get('desc'):
+                    raise OSError(res.get('desc'))
 
 
 preprocess_hooker()
