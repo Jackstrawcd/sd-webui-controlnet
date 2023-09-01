@@ -9,7 +9,7 @@ import time
 import typing
 import os
 import uuid
-import sys
+import warnings
 
 import requests
 from PIL import Image
@@ -17,10 +17,23 @@ from io import BytesIO
 from modules.shared import opts, cmd_opts
 from scripts import global_state
 from urllib.parse import urlparse
+from enum import IntEnum
 
 HOST = os.getenv('TSS_HOST', 'https://draw-plus-backend-qa.xingzheai.cn/').rstrip('/')
 BUCKET = getattr(opts, "xz_bucket", os.getenv('StorageBucket', 'xingzheaidraw'))
+TSS_CODE_OK = 200
 cache = {}
+
+
+class TaskStatus(IntEnum):
+    Waiting = 0
+    Prepare = 1
+    Ready = 2
+    Running = 3
+    Uploading = 4
+    TrainCompleted = 9
+    Finish = 10
+    Failed = -1
 
 
 def enable():
@@ -49,12 +62,12 @@ def request_tss(api) -> typing.Optional[typing.Any]:
     resp = requests.get(api, headers=headers, timeout=5)
     if resp:
         json_d = resp.json()
-        if json_d['code'] == 200:
-
+        if json_d['code'] == TSS_CODE_OK:
             return json_d['data']
 
 
 def request_mudules():
+    warnings.warn('Call to deprecated function: request_mudules', DeprecationWarning)
     api = HOST + '/v1/samplers/category?categorys=3'
     data = request_tss(api)
     if not data:
@@ -67,7 +80,32 @@ def request_mudules():
     return [item['real_value'] for item in data['items']['3']]
 
 
+def request_preprocess_v2():
+    api = HOST + '/v1/controlnet/preprocessor?limit=200'
+    data = request_tss(api)
+    if not data:
+        data = cache.get('mudules')
+    else:
+        cache['mudules'] = data
+
+    if not data:
+        raise Exception('request tss failed')
+
+    processors = set()
+    models = {"None": None}
+    for item in data['items']:
+        p = item['preprocessor']
+        if p == 'None':
+            p = 'none'
+        processors.add(p)
+        if '无' != item['model_name']:
+            models[item['model_name']] = models[item['model']]
+
+    return list(processors), models
+
+
 def request_models():
+    warnings.warn('Call to deprecated function: request_models', DeprecationWarning)
     api = HOST + '/v1/samplers/category?categorys=4'
     data = request_tss(api)
     if not data:
@@ -86,7 +124,7 @@ def request_models():
 
 def set_ui_preprocessors(tss):
     global_state.ui_preprocessor_keys.clear()
-
+    warnings.warn('Call to deprecated function: set_ui_preprocessors', DeprecationWarning)
     if tss:
         tss_processors = request_mudules()
         for p in tss_processors:
@@ -102,7 +140,26 @@ def set_ui_preprocessors(tss):
                                                      not in global_state.ui_preprocessor_keys])
 
 
+def set_ui_preprocess_model_v2(tss):
+    global_state.ui_preprocessor_keys.clear()
+
+    if tss:
+        tss_processors, models = request_preprocess_v2()
+        global_state.cn_models.clear()
+        global_state.cn_models.update(models)
+        global_state.ui_preprocessor_keys.extend(tss_processors)
+
+    else:
+        global_state.update_cn_models()
+        global_state.ui_preprocessor_keys.extend(['none', global_state.preprocessor_aliases['invert']])
+        global_state.ui_preprocessor_keys += sorted([global_state.preprocessor_aliases.get(k, k)
+                                                     for k in global_state.cn_preprocessor_modules.keys()
+                                                     if global_state.preprocessor_aliases.get(k, k)
+                                                     not in global_state.ui_preprocessor_keys])
+
+
 def set_ui_models(tss):
+    warnings.warn('Call to deprecated function: set_ui_models', DeprecationWarning)
     if not tss:
         global_state.update_cn_models()
     else:
@@ -114,8 +171,7 @@ def set_ui_models(tss):
 def init_tss_ui():
     if enable() and not cache.get('init', 0):
         print('request tss controlnet preprocess and models...')
-        set_ui_preprocessors(True)
-        set_ui_models(True)
+        set_ui_preprocess_model_v2(True)
         cache['init'] = 1
 
 
@@ -124,8 +180,9 @@ def preprocess_hooker():
     # cache['ui_preprocessor_keys'] = [x for x in global_state.ui_preprocessor_keys]
     callbacks = getattr(opts, 'xz_ext_callbacks', []) or []
 
-    callbacks.append(set_ui_preprocessors)
-    callbacks.append(set_ui_models)
+    # callbacks.append(set_ui_preprocessors)
+    # callbacks.append(set_ui_models)
+    callbacks.append(set_ui_preprocess_model_v2)
     setattr(opts, 'xz_ext_callbacks', callbacks)
 
 
@@ -143,15 +200,15 @@ def upload_image_data(image_data: Image, persistent=False):
         image_data.save(output_bytes, format="PNG")
         bytes_data = output_bytes.getvalue()
         data = {
-            'filename':  filename,
+            'filename': filename,
             'file_size': len(bytes_data),
             'persistent': persistent
         }
 
-        resp = requests.post(HOST+'/v1/oss-files', json=data, timeout=4, headers=headers())
+        resp = requests.post(HOST + '/v1/oss-files', json=data, timeout=4, headers=headers())
         if resp:
             json_d = resp.json()
-            if json_d['code'] == 200:
+            if json_d['code'] == TSS_CODE_OK:
                 data = json_d['data']
                 resp2 = requests.put(data['url'], headers={
                     'Content-Type': 'image/png'
@@ -171,10 +228,10 @@ def waite_task(task_id, timeout=300):
         resp = requests.get(HOST + f'/v1/img-tasks/{task_id}', headers=headers(), timeout=5)
         if resp:
             json_d = resp.json()
-            if json_d['code'] == 200:
+            if json_d['code'] == TSS_CODE_OK:
                 data = json_d['data']
                 status = data['status']
-                if status == 10 or status == -1:
+                if status == TaskStatus.Failed or status == TaskStatus.Finish:
                     return data
 
 
@@ -188,7 +245,7 @@ def run_annotator(image, module, pres, pthr_a, pthr_b, t2i_w, t2i_h, pp, rm):
         raise Exception('upload image file failed')
 
     data = {
-        'image':  os.path.join(BUCKET, image_key),
+        'image': os.path.join(BUCKET, image_key),
         'mask': os.path.join(BUCKET, mask_key),
         'module': module,
         'annotator_resolution': pres,
@@ -203,7 +260,7 @@ def run_annotator(image, module, pres, pthr_a, pthr_b, t2i_w, t2i_h, pp, rm):
     resp = requests.post(HOST + '/v1/img2img-tasks/cnet', json=data, timeout=4, headers=headers())
     if resp:
         json_d = resp.json()
-        if json_d['code'] == 200:
+        if json_d['code'] == TSS_CODE_OK:
             res = waite_task(json_d['data']['task_id'])
             if res:
                 images = res.get('hig_images') or res.get('images')
@@ -226,4 +283,3 @@ def run_annotator(image, module, pres, pthr_a, pthr_b, t2i_w, t2i_h, pp, rm):
 
 
 preprocess_hooker()
-

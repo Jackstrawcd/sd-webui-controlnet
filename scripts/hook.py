@@ -360,8 +360,10 @@ class UnetHook(nn.Module):
             cond_mark, outer.current_uc_indices, context = unmark_prompt_context(context)
             # logger.info(str(cond_mark[:, 0, 0, 0].detach().cpu().numpy().tolist()) + ' - ' + str(outer.current_uc_indices))
 
+            # outer.control_params 字段可能被restore删除故此调整
+
             # High-res fix
-            for param in outer.control_params:
+            for param in getattr(outer, 'control_params', []):
                 # select which hint_cond to use
                 if param.used_hint_cond is None:
                     param.used_hint_cond = param.hint_cond
@@ -390,7 +392,7 @@ class UnetHook(nn.Module):
             no_high_res_control = is_in_high_res_fix and shared.opts.data.get("control_net_no_high_res_fix", False)
 
             # Convert control image to latent
-            for param in outer.control_params:
+            for param in getattr(outer, 'control_params', []):
                 if param.used_hint_cond_latent is not None:
                     continue
                 if param.control_model_type not in [ControlModelType.AttentionInjection] \
@@ -400,7 +402,7 @@ class UnetHook(nn.Module):
                 param.used_hint_cond_latent = outer.call_vae_using_process(process, param.used_hint_cond, batch_size=batch_size)
 
             # handle prompt token control
-            for param in outer.control_params:
+            for param in getattr(outer, 'control_params', []):
                 if no_high_res_control:
                     continue
 
@@ -418,7 +420,7 @@ class UnetHook(nn.Module):
                 context = torch.cat([context, control.clone()], dim=1)
 
             # handle ControlNet / T2I_Adapter
-            for param in outer.control_params:
+            for param in getattr(outer, 'control_params', []):
                 if no_high_res_control:
                     continue
 
@@ -496,7 +498,7 @@ class UnetHook(nn.Module):
                         target[idx] = item + target[idx]
 
             # Replace x_t to support inpaint models
-            for param in outer.control_params:
+            for param in getattr(outer, 'control_params', []):
                 if param.used_hint_cond.shape[1] != 4:
                     continue
                 if x.shape[1] != 9:
@@ -531,7 +533,7 @@ class UnetHook(nn.Module):
                 module.style_cfgs = []
 
             # Handle attention and AdaIn control
-            for param in outer.control_params:
+            for param in getattr(outer, 'control_params', []):
                 if no_high_res_control:
                     continue
 
@@ -609,7 +611,7 @@ class UnetHook(nn.Module):
             h = self.out(h)
 
             # Post-processing for color fix
-            for param in outer.control_params:
+            for param in getattr(outer, 'control_params', []):
                 if param.used_hint_cond_latent is None:
                     continue
                 if 'colorfix' not in param.preprocessor['name']:
@@ -638,7 +640,7 @@ class UnetHook(nn.Module):
                 h = eps_prd * w + h * (1 - w)
 
             # Post-processing for restore
-            for param in outer.control_params:
+            for param in getattr(outer, 'control_params', []):
                 if param.used_hint_cond_latent is None:
                     continue
                 if 'inpaint_only' not in param.preprocessor['name']:
