@@ -23,6 +23,7 @@ HOST = os.getenv('TSS_HOST', 'https://draw-plus-backend-qa.xingzheai.cn/').rstri
 BUCKET = getattr(opts, "xz_bucket", os.getenv('StorageBucket', 'xingzheaidraw'))
 TSS_CODE_OK = 200
 cache = {}
+request_history = {}
 
 
 class TaskStatus(IntEnum):
@@ -81,15 +82,24 @@ def request_mudules():
 
 
 def request_preprocess_v2():
-    api = HOST + '/v1/controlnet/preprocessor?limit=200'
-    data = request_tss(api)
-    if not data:
-        data = cache.get('mudules')
+    path = '/v1/controlnet/preprocessor'
+    query = 'limit=200'
+    api = f'{HOST}{path}?{query}'
+    now = time.time()
+    # 缓存
+    if now - request_history.get(f'{path}?{query}', 0) < 300:
+        data = cache['mudules']
     else:
-        cache['mudules'] = data
+        data = request_tss(api)
+        if not data:
+            data = cache.get('mudules')
 
-    if not data:
-        raise Exception('request tss failed')
+        else:
+            cache['mudules'] = data
+            request_history[f'{path}?{query}'] = now
+
+        if not data:
+            raise Exception('request tss failed')
 
     processors = set()
     models = {"None": None}
@@ -99,7 +109,7 @@ def request_preprocess_v2():
             p = 'none'
         processors.add(p)
         if '无' != item['model_name']:
-            models[item['model_name']] = models[item['model']]
+            models[item['model_name']] = item['model']
 
     return list(processors), models
 
