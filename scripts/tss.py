@@ -38,7 +38,7 @@ class TaskStatus(IntEnum):
 
 
 def enable():
-    is_worker = cmd_opts.worker
+    is_worker = getattr(cmd_opts, 'worker', False)
     return getattr(opts, "xz_ext_enable", False) and not is_worker
 
 
