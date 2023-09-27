@@ -86,7 +86,7 @@ def decode_json_as_poses(json_string: str, normalize_coords: bool = False) -> Tu
         """Yield successive n-sized chunks from lst."""
         for i in range(0, len(lst), n):
             yield lst[i:i + n]
-    
+
     def decompress_keypoints(numbers: Optional[List[float]]) -> Optional[List[Optional[Keypoint]]]:
         if not numbers:
             return None
@@ -119,8 +119,8 @@ def decode_json_as_poses(json_string: str, normalize_coords: bool = False) -> Tu
     )
 
 
-def encode_poses_as_json(poses: List[PoseResult], canvas_height: int, canvas_width: int) -> str:
-    """ Encode the pose as a JSON string following openpose JSON output format:
+def encode_poses_as_json(poses: List[PoseResult], canvas_height: int, canvas_width: int) -> dict:
+    """ Encode the pose as a JSON compatible dict following openpose JSON output format:
     https://github.com/CMU-Perceptual-Computing-Lab/openpose/blob/master/doc/02_output.md
     """
     def compress_keypoints(keypoints: Union[List[Keypoint], None]) -> Union[List[float], None]:
@@ -137,7 +137,7 @@ def encode_poses_as_json(poses: List[PoseResult], canvas_height: int, canvas_wid
             )
         ]
 
-    return json.dumps({
+    return {
         'people': [
             {
                 'pose_keypoints_2d': compress_keypoints(pose.body.keypoints),
@@ -149,7 +149,7 @@ def encode_poses_as_json(poses: List[PoseResult], canvas_height: int, canvas_wid
         ],
         'canvas_height': canvas_height,
         'canvas_width': canvas_width,
-    }, indent=4)
+    }
 
 class OpenposeDetector:
     """
@@ -191,7 +191,7 @@ class OpenposeDetector:
         self.body_estimation = Body(body_modelpath)
         self.hand_estimation = Hand(hand_modelpath)
         self.face_estimation = Face(face_modelpath)
-    
+
     def load_dw_model(self):
         from .wholebody import Wholebody # DW Pose
 
@@ -306,7 +306,7 @@ class OpenposeDetector:
                 ), left_hand, right_hand, face))
             
             return results
-    
+
     def detect_poses_dw(self, oriImg) -> List[PoseResult]:
         """
         Detect poses in the given image using DW Pose:
@@ -327,7 +327,7 @@ class OpenposeDetector:
             return Wholebody.format_result(keypoints_info)
 
     def __call__(
-            self, oriImg, include_body=True, include_hand=False, include_face=False, 
+            self, oriImg, include_body=True, include_hand=False, include_face=False,
             use_dw_pose=False, json_pose_callback: Callable[[str], None] = None,
         ):
         """
