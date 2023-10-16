@@ -318,7 +318,7 @@ def select_control_type(control_type: str) -> Tuple[List[str], List[str], str, s
         x for x in model_list if pattern in x.lower() or x.lower() == "none"
     ]
     if default_option not in filtered_preprocessor_list:
-        default_option = filtered_preprocessor_list[0]
+        default_option = filtered_preprocessor_list[0] if filtered_preprocessor_list else 'none'
     if len(filtered_model_list) == 1:
         default_model = "None"
         filtered_model_list = model_list
