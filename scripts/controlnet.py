@@ -822,11 +822,15 @@ class Script(scripts.Script, metaclass=(
                 thr_a=unit.threshold_a,
                 thr_b=unit.threshold_b,
             )
-
+            
+            def store_detected_map(detected_map, module: str) -> None:
+                if unit.save_detected_map:
+                    detected_maps.append((detected_map, module))
+            
             if high_res_fix:
                 if is_image:
                     hr_control, hr_detected_map = Script.detectmap_proc(detected_map, unit.module, resize_mode, hr_y, hr_x)
-                    detected_maps.append((hr_detected_map, unit.module))
+                    store_detected_map(hr_detected_map, unit.module)
                 else:
                     hr_control = detected_map
             else:
@@ -834,10 +838,10 @@ class Script(scripts.Script, metaclass=(
 
             if is_image:
                 control, detected_map = Script.detectmap_proc(detected_map, unit.module, resize_mode, h, w)
-                detected_maps.append((detected_map, unit.module))
+                store_detected_map(detected_map, unit.module)
             else:
                 control = detected_map
-                detected_maps.append((input_image, unit.module))
+                store_detected_map(input_image, unit.module)
 
             if control_model_type == ControlModelType.T2I_StyleAdapter:
                 control = control['last_hidden_state']
@@ -1100,7 +1104,7 @@ def on_ui_settings():
     shared.opts.add_option("control_net_unit_count", shared.OptionInfo(
         3, "Multi-ControlNet: ControlNet unit number (requires restart)", gr.Slider, {"minimum": 1, "maximum": 10, "step": 1}, section=section))
     shared.opts.add_option("control_net_model_cache_size", shared.OptionInfo(
-        1, "Model cache size (requires restart)", gr.Slider, {"minimum": 1, "maximum": 5, "step": 1}, section=section))
+        1, "Model cache size (requires restart)", gr.Slider, {"minimum": 1, "maximum": 10, "step": 1}, section=section))
     shared.opts.add_option("control_net_inpaint_blur_sigma", shared.OptionInfo(
         7, "ControlNet inpainting Gaussian blur sigma", gr.Slider, {"minimum": 0, "maximum": 64, "step": 1}, section=section))
     shared.opts.add_option("control_net_no_high_res_fix", shared.OptionInfo(

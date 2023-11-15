@@ -1,17 +1,21 @@
+import os
 import unittest
+import requests
 import importlib
 utils = importlib.import_module('extensions.sd-webui-controlnet.tests.utils', 'utils')
-utils.setup_test_env()
-import requests
-
-
+from scripts.enums import StableDiffusionVersion
+from modules import shared
 
 class TestAlwaysonTxt2ImgWorking(unittest.TestCase):
     def setUp(self):
+        self.sd_version = StableDiffusionVersion(int(
+            os.environ.get("CONTROLNET_TEST_SD_VERSION", StableDiffusionVersion.SD1x.value)))
+        self.model = utils.get_model("canny", self.sd_version)
+        
         controlnet_unit = {
             "enabled": True,
             "module": "none",
-            "model": utils.get_model(),
+            "model": self.model,
             "weight": 1.0,
             "image": utils.readImage("test/test_files/img2img_basic.png"),
             "mask": utils.readImage("test/test_files/img2img_basic.png"),
@@ -67,14 +71,22 @@ class TestAlwaysonTxt2ImgWorking(unittest.TestCase):
         }
 
     def assert_status_ok(self, msg=None):
-        self.assertEqual(requests.post(self.url_txt2img, json=self.simple_txt2img).status_code, 200, msg)
-        stderr = ""
-        with open('test/stderr.txt') as f:
-            stderr = f.read().lower()
-        with open('test/stderr.txt', 'w') as f:
-            # clear stderr file so that we can easily parse the next test
-            f.write("")
-        self.assertFalse('error' in stderr, "Errors in stderr: \n" + stderr)
+        msg = ("" if msg is None else msg) + f"\nPayload:\n{self.simple_txt2img}"
+
+        resp = requests.post(self.url_txt2img, json=self.simple_txt2img)
+        self.assertEqual(resp.status_code, 200, msg)
+        # Note: Exception/error in ControlNet code likely will cause hook failure, which further leads
+        # to detected map not being appended at the end of response image array.
+        data = resp.json()
+        expected_image_num = (
+            self.simple_txt2img["n_iter"] * self.simple_txt2img["batch_size"] + 
+            min(sum([
+                unit.get("save_detected_map", True)
+                for unit in 
+                self.simple_txt2img["alwayson_scripts"]["ControlNet"]["args"]
+            ]), shared.opts.data.get("control_net_unit_count", 3))
+        )
+        self.assertEqual(len(data["images"]), expected_image_num, msg)
 
     def test_txt2img_simple_performed(self):
         self.assert_status_ok()
@@ -106,7 +118,7 @@ class TestAlwaysonTxt2ImgWorking(unittest.TestCase):
         self.simple_txt2img["alwayson_scripts"]["ControlNet"]["args"] = [
             {
                 "input_image": utils.readImage("test/test_files/img2img_basic.png"),
-                "model": utils.get_model(),
+                "model": self.model,
             }
         ]
 
@@ -123,8 +135,8 @@ class TestAlwaysonTxt2ImgWorking(unittest.TestCase):
                 self.simple_txt2img["alwayson_scripts"]["ControlNet"]["args"] = [
                     {
                         "input_image": utils.readImage("test/test_files/img2img_basic.png"),
-                        "model": utils.get_model(),
-                        "module": module
+                        "model": self.model,
+                        "module": module,
                     }
                 ]
                 self.assert_status_ok(f'Running preprocessor module: {module}')
@@ -135,11 +147,68 @@ class TestAlwaysonTxt2ImgWorking(unittest.TestCase):
                 self.simple_txt2img["alwayson_scripts"]["ControlNet"]["args"] = [
                     {
                         "input_image": utils.readImage("test/test_files/img2img_basic.png"),
-                        "model": utils.get_model(),
+                        "model": self.model,
                         param: -1,
                     }
                 ]
                 self.assert_status_ok(f'Run with {param} = -1.')
+                
+    def test_save_detected_map(self):
+        for save_map in (True, False):
+            with self.subTest(save_map=save_map):
+                self.simple_txt2img["alwayson_scripts"]["ControlNet"]["args"] = [
+                    {
+                        "input_image": utils.readImage("test/test_files/img2img_basic.png"),
+                        "model": self.model,
+                        "module": "depth",
+                        "save_detected_map": save_map,
+                    }
+                ]
+            
+                resp = requests.post(self.url_txt2img, json=self.simple_txt2img).json()
+                self.assertEqual(2 if save_map else 1, len(resp["images"]))
+
+    def test_ip_adapter_face(self):
+        match self.sd_version:
+            case StableDiffusionVersion.SDXL:
+                model = "ip-adapter-plus-face_sdxl_vit-h"
+                module = "ip-adapter_clip_sdxl_plus_vith"
+            case StableDiffusionVersion.SD1x:
+                model = "ip-adapter-plus-face_sd15"
+                module = "ip-adapter_clip_sd15"
+            case _:
+                # Skip the test for all other versions
+                return
+        
+        self.simple_txt2img["alwayson_scripts"]["ControlNet"]["args"] = [
+            {
+                "input_image": utils.readImage("test/test_files/img2img_basic.png"),
+                "model": utils.get_model(model, self.sd_version),
+                "module": module,
+            }
+        ]
+        
+        self.assert_status_ok()
+
+    def test_ip_adapter_fullface(self):
+        match self.sd_version:
+            case StableDiffusionVersion.SD1x:
+                model = "ip-adapter-full-face_sd15"
+                module = "ip-adapter_clip_sd15"
+            case _:
+                # Skip the test for all other versions
+                return
+        
+        self.simple_txt2img["alwayson_scripts"]["ControlNet"]["args"] = [
+            {
+                "input_image": utils.readImage("test/test_files/img2img_basic.png"),
+                "model": utils.get_model(model, self.sd_version),
+                "module": module,
+            }
+        ]
+        
+        self.assert_status_ok()
+
 
 if __name__ == "__main__":
     unittest.main()
