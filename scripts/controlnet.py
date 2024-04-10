@@ -307,9 +307,27 @@ class Script(scripts.Script, metaclass=(
     
     @staticmethod
     def clear_control_model_cache():
-        Script.model_cache.clear()
+        cache_models = Script.cached_models()
+        if cache_models:
+            for name in Script.model_cache.keys():
+                if name not in cache_models:
+                    del Script.model_cache[name]
+        else:
+            Script.model_cache.clear()
         gc.collect()
         devices.torch_gc()
+
+    @staticmethod
+    def cached_models():
+        if hasattr(Script, "env_cache_model_names"):
+            return getattr(Script, "env_cache_model_names", [])
+
+        models = os.getenv('CONTROL_NET_CACHE_MODEL', "") or ""
+        cache_model_names = models.split(',')
+        if cache_model_names:
+            setattr(Script, "env_cache_model_names", cache_model_names)
+
+        return cache_model_names
 
     @staticmethod
     def load_control_model(p, unet, model):
@@ -319,7 +337,14 @@ class Script(scripts.Script, metaclass=(
 
         # Remove model from cache to clear space before building another model
         if len(Script.model_cache) > 0 and len(Script.model_cache) >= shared.opts.data.get("control_net_model_cache_size", 2):
-            Script.model_cache.popitem(last=False)
+            cache_models = Script.cached_models()
+            if cache_models:
+                for name in Script.model_cache.keys():
+                    if name not in cache_models:
+                        del Script.model_cache[name]
+                        break
+            else:
+                Script.model_cache.popitem(last=False)
             gc.collect()
             devices.torch_gc()
 
