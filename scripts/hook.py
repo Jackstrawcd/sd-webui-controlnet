@@ -1,17 +1,15 @@
 import torch
-import einops
 import hashlib
 import numpy as np
 import torch.nn as nn
 from functools import partial
-import modules.processing
+from typing import Optional, Any
 
-
-from enum import Enum
 from scripts.logging import logger
+from scripts.enums import ControlModelType, AutoMachine, HiResFixOption
+from scripts.ipadapter.ipadapter_model import ImageEmbed
+from scripts.controlnet_sparsectrl import SparseCtrl
 from modules import devices, lowvram, shared, scripts
-
-cond_cast_unet = getattr(devices, 'cond_cast_unet', lambda x: x)
 
 from ldm.modules.diffusionmodules.util import timestep_embedding, make_beta_schedule
 from ldm.modules.diffusionmodules.openaimodel import UNetModel
@@ -24,10 +22,11 @@ from modules.processing import StableDiffusionProcessing
 
 try:
     from sgm.modules.attention import BasicTransformerBlock as BasicTransformerBlockSGM
-except:
+except ImportError:
     print('Warning: ControlNet failed to load SGM - will use LDM instead.')
     BasicTransformerBlockSGM = BasicTransformerBlock
 
+cond_cast_unet = getattr(devices, 'cond_cast_unet', lambda x: x)
 
 POSITIVE_MARK_TOKEN = 1024
 NEGATIVE_MARK_TOKEN = - POSITIVE_MARK_TOKEN
@@ -90,21 +89,22 @@ def unmark_prompt_context(x):
             logger.warning('Solution (For extension developers): Take a look at ControlNet\' hook.py '
                   'UnetHook.hook.process_sample and manually call mark_prompt_context to mark cond/uncond prompts.')
         mark_batch = torch.ones(size=(x.shape[0], 1, 1, 1), dtype=x.dtype, device=x.device)
-        uc_indices = []
         context = x
-        return mark_batch, uc_indices, context
+        return mark_batch, [], [], context
     mark = x[:, 0, :]
     context = x[:, 1:, :]
     mark = torch.mean(torch.abs(mark - NEGATIVE_MARK_TOKEN), dim=1)
     mark = (mark > MARK_EPS).float()
     mark_batch = mark[:, None, None, None].to(x.dtype).to(x.device)
-    uc_indices = mark.detach().cpu().numpy().tolist()
-    uc_indices = [i for i, item in enumerate(uc_indices) if item < 0.5]
+
+    mark = mark.detach().cpu().numpy().tolist()
+    uc_indices = [i for i, item in enumerate(mark) if item < 0.5]
+    c_indices = [i for i, item in enumerate(mark) if not item < 0.5]
 
     StableDiffusionProcessing.cached_c = [None, None]
     StableDiffusionProcessing.cached_uc = [None, None]
 
-    return mark_batch, uc_indices, context
+    return mark_batch, uc_indices, c_indices, context
 
 
 class HackedImageRNG:
@@ -123,36 +123,6 @@ class HackedImageRNG:
         result = predict_q_sample(self.sd_model, x0, ts, result)
         logger.info(f'[ControlNet] Initial noise hack applied to {result.shape}.')
         return result
-
-
-class ControlModelType(Enum):
-    """
-    The type of Control Models (supported or not).
-    """
-
-    ControlNet = "ControlNet, Lvmin Zhang"
-    T2I_Adapter = "T2I_Adapter, Chong Mou"
-    T2I_StyleAdapter = "T2I_StyleAdapter, Chong Mou"
-    T2I_CoAdapter = "T2I_CoAdapter, Chong Mou"
-    MasaCtrl = "MasaCtrl, Mingdeng Cao"
-    GLIGEN = "GLIGEN, Yuheng Li"
-    AttentionInjection = "AttentionInjection, Lvmin Zhang"  # A simple attention injection written by Lvmin
-    StableSR = "StableSR, Jianyi Wang"
-    PromptDiffusion = "PromptDiffusion, Zhendong Wang"
-    ControlLoRA = "ControlLoRA, Wu Hecong"
-    ReVision = "ReVision, Stability"
-    IPAdapter = "IPAdapter, Hu Ye"
-    Controlllite = "Controlllite, Kohya"
-
-
-# Written by Lvmin
-class AutoMachine(Enum):
-    """
-    Lvmin's algorithm for Attention/AdaIn AutoMachine States.
-    """
-
-    Read = "Read"
-    Write = "Write"
 
 
 class TorchHijackForUnet:
@@ -200,6 +170,8 @@ class ControlParams:
             global_average_pooling,
             soft_injection,
             cfg_injection,
+            hr_option: HiResFixOption = HiResFixOption.BOTH,
+            control_context_override: Optional[Any] = None,
             **kwargs  # To avoid errors
     ):
         self.control_model = control_model
@@ -213,6 +185,8 @@ class ControlParams:
         self.control_model_type = control_model_type
         self.global_average_pooling = global_average_pooling
         self.hr_hint_cond = hr_hint_cond
+        self.hr_option = hr_option
+        self.control_context_override = control_context_override
         self.used_hint_cond = None
         self.used_hint_cond_latent = None
         self.used_hint_inpaint_hijack = None
@@ -234,6 +208,17 @@ class ControlParams:
         self.used_hint_cond = None
         self.used_hint_cond_latent = None
         self.used_hint_inpaint_hijack = None
+
+    def disabled_by_hr_option(self, is_in_high_res_fix: bool) -> bool:
+        if self.hr_option == HiResFixOption.BOTH:
+            control_disabled = False
+        elif self.hr_option == HiResFixOption.LOW_RES_ONLY:
+            control_disabled = is_in_high_res_fix
+        elif self.hr_option == HiResFixOption.HIGH_RES_ONLY:
+            control_disabled = not is_in_high_res_fix
+        else:
+            assert False, "NOTREACHED"
+        return control_disabled
 
 
 def aligned_adding(base, x, require_channel_alignment):
@@ -380,7 +365,9 @@ class UnetHook(nn.Module):
         self.gn_auto_machine = AutoMachine.Read
         self.gn_auto_machine_weight = 1.0
         self.current_style_fidelity = 0.0
-        self.current_uc_indices = None
+        self.current_uc_indices = []
+        self.current_c_indices = []
+        self.is_in_high_res_fix = False
 
     @staticmethod
     def call_vae_using_process(p, x, batch_size=None, mask=None):
@@ -398,17 +385,25 @@ class UnetHook(nn.Module):
             vae_output = vae_cache.get(x)
             if vae_output is None:
                 with devices.autocast():
-                    vae_output = p.sd_model.encode_first_stage(x)
-                    vae_output = p.sd_model.get_first_stage_encoding(vae_output)
+                    vae_output = torch.stack([
+                        p.sd_model.get_first_stage_encoding(
+                            p.sd_model.encode_first_stage(torch.unsqueeze(img, 0).to(device=devices.device))
+                        )[0].to(img.device)
+                        for img in x
+                    ])
                     if torch.all(torch.isnan(vae_output)).item():
-                        logger.info(f'ControlNet find Nans in the VAE encoding. \n '
-                                    f'Now ControlNet will automatically retry.\n '
-                                    f'To always start with 32-bit VAE, use --no-half-vae commandline flag.')
+                        logger.info('ControlNet find Nans in the VAE encoding. \n '
+                                    'Now ControlNet will automatically retry.\n '
+                                    'To always start with 32-bit VAE, use --no-half-vae commandline flag.')
                         devices.dtype_vae = torch.float32
                         x = x.to(devices.dtype_vae)
                         p.sd_model.first_stage_model.to(devices.dtype_vae)
-                        vae_output = p.sd_model.encode_first_stage(x)
-                        vae_output = p.sd_model.get_first_stage_encoding(vae_output)
+                        vae_output = torch.stack([
+                            p.sd_model.get_first_stage_encoding(
+                                p.sd_model.encode_first_stage(torch.unsqueeze(img, 0).to(device=devices.device))
+                            )[0].to(img.device)
+                            for img in x
+                        ])
                 vae_cache.set(x, vae_output)
                 logger.info(f'ControlNet used {str(devices.dtype_vae)} VAE to encode {vae_output.shape}.')
             latent = vae_output
@@ -422,13 +417,16 @@ class UnetHook(nn.Module):
 
     def guidance_schedule_handler(self, x):
         # control_params 属性可能会被删除
-        for param in getattr(self, 'control_params', []):
+        if not getattr(self, 'control_params', []):
+            return
+
+        for param in self.control_params:
             current_sampling_percent = (x.sampling_step / x.total_sampling_steps)
             param.guidance_stopped = current_sampling_percent < param.start_guidance_percent or current_sampling_percent > param.stop_guidance_percent
             if self.model is not None:
                 self.model.current_sampling_percent = current_sampling_percent
 
-    def hook(self, model, sd_ldm, control_params, process):
+    def hook(self, model, sd_ldm, control_params, process, batch_option_uint_separate=False, batch_option_style_align=False):
         self.model = model
         self.sd_ldm = sd_ldm
         self.control_params = control_params
@@ -463,7 +461,7 @@ class UnetHook(nn.Module):
             batch_size = int(x.shape[0])
 
             # Handle cond-uncond marker
-            cond_mark, outer.current_uc_indices, context = unmark_prompt_context(context)
+            cond_mark, outer.current_uc_indices, outer.current_c_indices, context = unmark_prompt_context(context)
             outer.model.cond_mark = cond_mark
             # logger.info(str(cond_mark[:, 0, 0, 0].detach().cpu().numpy().tolist()) + ' - ' + str(outer.current_uc_indices))
 
@@ -517,7 +515,7 @@ class UnetHook(nn.Module):
                             param.used_hint_inpaint_hijack = None
 
             self.is_in_high_res_fix = is_in_high_res_fix
-            no_high_res_control = is_in_high_res_fix and shared.opts.data.get("control_net_no_high_res_fix", False)
+            outer.is_in_high_res_fix = is_in_high_res_fix
 
             # Convert control image to latent
             for param in getattr(outer, 'control_params', []):
@@ -544,10 +542,7 @@ class UnetHook(nn.Module):
 
             # handle prompt token control
             for param in getattr(outer, 'control_params', []):
-                if no_high_res_control:
-                    continue
-
-                if param.guidance_stopped:
+                if param.guidance_stopped or param.disabled_by_hr_option(self.is_in_high_res_fix):
                     continue
 
                 if param.control_model_type not in [ControlModelType.T2I_StyleAdapter]:
@@ -560,38 +555,49 @@ class UnetHook(nn.Module):
                 context = torch.cat([context, control.clone()], dim=1)
 
             # handle ControlNet / T2I_Adapter
-            for param in getattr(outer, 'control_params', []):
-                if no_high_res_control:
+            for param_index, param in enumerate(outer.control_params):
+                if param.guidance_stopped or param.disabled_by_hr_option(self.is_in_high_res_fix):
                     continue
 
-                if param.guidance_stopped:
-                    continue
-
-                if param.control_model_type not in [ControlModelType.ControlNet, ControlModelType.T2I_Adapter]:
+                if not (
+                    param.control_model_type.is_controlnet() or
+                    param.control_model_type == ControlModelType.T2I_Adapter
+                ):
                     continue
 
                 # inpaint model workaround
                 x_in = x
                 control_model = param.control_model.control_model
 
-                if param.control_model_type == ControlModelType.ControlNet:
+                if param.control_model_type.is_controlnet():
                     if x.shape[1] != control_model.input_blocks[0][0].in_channels and x.shape[1] == 9:
                         # inpaint_model: 4 data + 4 downscaled image + 1 mask
                         x_in = x[:, :4, ...]
                         require_inpaint_hijack = True
 
-                assert param.used_hint_cond is not None, f"Controlnet is enabled but no input image is given"
+                assert param.used_hint_cond is not None, "Controlnet is enabled but no input image is given"
 
                 hint = param.used_hint_cond
+                if param.control_model_type == ControlModelType.InstantID:
+                    assert isinstance(param.control_context_override, ImageEmbed)
+                    controlnet_context = param.control_context_override.eval(cond_mark).to(x.device, dtype=x.dtype)
+                else:
+                    controlnet_context = context
 
                 # ControlNet inpaint protocol
-                if hint.shape[1] == 4:
+                if hint.shape[1] == 4 and not isinstance(control_model, SparseCtrl):
                     c = hint[:, 0:3, :, :]
                     m = hint[:, 3:4, :, :]
                     m = (m > 0.5).float()
                     hint = c * (1 - m) - m
 
-                control = param.control_model(x=x_in, hint=hint, timesteps=timesteps, context=context, y=y)
+                control = param.control_model(
+                    x=x_in,
+                    hint=hint,
+                    timesteps=timesteps,
+                    context=controlnet_context,
+                    y=y
+                )
 
                 if is_sdxl:
                     control_scales = [param.weight] * 10
@@ -618,13 +624,16 @@ class UnetHook(nn.Module):
                     # important! use the soft weights with high-res fix can significantly reduce artifacts.
                     if param.control_model_type == ControlModelType.T2I_Adapter:
                         control_scales = [param.weight * x for x in (0.25, 0.62, 0.825, 1.0)]
-                    elif param.control_model_type == ControlModelType.ControlNet:
+                    elif param.control_model_type.is_controlnet():
                         control_scales = [param.weight * (0.825 ** float(12 - i)) for i in range(13)]
 
-                if is_sdxl and param.control_model_type == ControlModelType.ControlNet:
+                if is_sdxl and param.control_model_type.is_controlnet():
                     control_scales = control_scales[:10]
 
                 if param.advanced_weighting is not None:
+                    logger.info(f"Advanced weighting enabled. {param.advanced_weighting}")
+                    if param.soft_injection or high_res_fix_forced_soft_injection:
+                        logger.warn("Advanced weighting overwrites soft_injection effect.")
                     control_scales = param.advanced_weighting
 
                 control = [c * scale for c, scale in zip(control, control_scales)]
@@ -633,18 +642,27 @@ class UnetHook(nn.Module):
 
                 for idx, item in enumerate(control):
                     target = None
-                    if param.control_model_type == ControlModelType.ControlNet:
+                    if param.control_model_type.is_controlnet():
                         target = total_controlnet_embedding
                     if param.control_model_type == ControlModelType.T2I_Adapter:
                         target = total_t2i_adapter_embedding
                     if target is not None:
-                        target[idx] = item + target[idx]
+                        if batch_option_uint_separate:
+                            for pi, ci in enumerate(outer.current_c_indices):
+                                if pi % len(outer.control_params) != param_index:
+                                    item[ci] = 0
+                            for pi, ci in enumerate(outer.current_uc_indices):
+                                if pi % len(outer.control_params) != param_index:
+                                    item[ci] = 0
+                            target[idx] = item + target[idx]
+                        else:
+                            target[idx] = item + target[idx]
 
             # Replace x_t to support inpaint models
             for param in getattr(outer, 'control_params', []):
                 if not isinstance(param.used_hint_cond, torch.Tensor):
                     continue
-                if param.used_hint_cond.shape[1] != 4:
+                if param.used_hint_cond.ndim < 2 or param.used_hint_cond.shape[1] != 4:
                     continue
                 if x.shape[1] != 9:
                     continue
@@ -671,8 +689,9 @@ class UnetHook(nn.Module):
                 try:
                     # Trigger the register_forward_pre_hook
                     outer.sd_ldm.model()
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug("register_forward_pre_hook")
+                    logger.debug(e)
 
             # Clear attention and AdaIn cache
             for module in outer.attn_module_list:
@@ -684,11 +703,8 @@ class UnetHook(nn.Module):
                 module.style_cfgs = []
 
             # Handle attention and AdaIn control
-            for param in getattr(outer, 'control_params', []):
-                if no_high_res_control:
-                    continue
-
-                if param.guidance_stopped:
+            for param in outer.control_params:
+                if param.guidance_stopped or param.disabled_by_hr_option(self.is_in_high_res_fix):
                     continue
 
                 if param.used_hint_cond_latent is None:
@@ -790,14 +806,14 @@ class UnetHook(nn.Module):
             h = self.out(h)
 
             # Post-processing for color fix
-            for param in getattr(outer, 'control_params', []):
+            for param in outer.control_params:
                 if param.used_hint_cond_latent is None:
                     continue
                 if 'colorfix' not in param.preprocessor['name']:
                     continue
 
                 k = int(param.preprocessor['threshold_a'])
-                if is_in_high_res_fix and not no_high_res_control:
+                if is_in_high_res_fix and not param.disabled_by_hr_option(self.is_in_high_res_fix):
                     k *= 2
 
                 # Inpaint hijack
@@ -887,6 +903,19 @@ class UnetHook(nn.Module):
                         self_attn1 = style_cfg * self_attn1_c + (1.0 - style_cfg) * self_attn1_uc
                     self.bank = []
                     self.style_cfgs = []
+                if outer.attention_auto_machine == AutoMachine.StyleAlign and not outer.is_in_high_res_fix:
+                    # very VRAM hungry - disable at high_res_fix
+
+                    def shared_attn1(inner_x):
+                        BB, FF, CC = inner_x.shape
+                        return self.attn1(inner_x.reshape(1, BB * FF, CC)).reshape(BB, FF, CC)
+
+                    uc_layer = shared_attn1(x_norm1[outer.current_uc_indices])
+                    c_layer = shared_attn1(x_norm1[outer.current_c_indices])
+                    self_attn1 = torch.zeros_like(x_norm1).to(uc_layer)
+                    self_attn1[outer.current_uc_indices] = uc_layer
+                    self_attn1[outer.current_c_indices] = c_layer
+                    del uc_layer, c_layer
                 if self_attn1 is None:
                     self_attn1 = self.attn1(x_norm1, context=self_attention_context)
 
@@ -939,9 +968,14 @@ class UnetHook(nn.Module):
 
         need_attention_hijack = False
 
-        for param in getattr(outer, 'control_params', []):
+        for param in outer.control_params:
             if param.control_model_type in [ControlModelType.AttentionInjection]:
                 need_attention_hijack = True
+
+        if batch_option_style_align:
+            need_attention_hijack = True
+            outer.attention_auto_machine = AutoMachine.StyleAlign
+            outer.gn_auto_machine = AutoMachine.StyleAlign
 
         all_modules = torch_dfs(model)
 
@@ -989,7 +1023,7 @@ class UnetHook(nn.Module):
             outer.attn_module_list = attn_modules
             outer.gn_module_list = gn_modules
         else:
-            for module in enumerate(all_modules):
+            for module in all_modules:
                 _original_inner_forward_cn_hijack = getattr(module, '_original_inner_forward_cn_hijack', None)
                 original_forward_cn_hijack = getattr(module, 'original_forward_cn_hijack', None)
                 if _original_inner_forward_cn_hijack is not None:

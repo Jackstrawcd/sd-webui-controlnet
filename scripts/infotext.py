@@ -29,16 +29,18 @@ def parse_value(value: str) -> Union[str, float, int, bool]:
 
 
 def serialize_unit(unit: external_code.ControlNetUnit) -> str:
+    excluded_fields = external_code.ControlNetUnit.infotext_excluded_fields()
+
     log_value = {
         field_to_displaytext(field): getattr(unit, field)
         for field in vars(external_code.ControlNetUnit()).keys()
-        if field not in ("image", "enabled") and getattr(unit, field) != -1
+        if field not in excluded_fields and getattr(unit, field) != -1
         # Note: exclude hidden slider values.
     }
     if not all("," not in str(v) and ":" not in str(v) for v in log_value.values()):
         logger.error(f"Unexpected tokens encountered:\n{log_value}")
         return ""
-    
+
     return ", ".join(f"{field}: {value}" for field, value in log_value.items())
 
 
@@ -110,14 +112,16 @@ class Infotext(object):
                 for field, value in vars(parse_unit(v)).items():
                     if field == "image":
                         continue
+                    if value is None:
+                        logger.debug(f"InfoText: Skipping {field} because value is None.")
+                        continue
 
-                    assert value is not None, f"{field} == None"
                     component_locator = f"{k} {field}"
                     updates[component_locator] = value
                     logger.debug(f"InfoText: Setting {component_locator} = {value}")
-            except Exception:
+            except Exception as e:
                 logger.warn(
-                    f"Failed to parse infotext, legacy format infotext is no longer supported:\n{v}"
+                    f"Failed to parse infotext, legacy format infotext is no longer supported:\n{v}\n{e}"
                 )
 
         results.update(updates)

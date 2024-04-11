@@ -7,6 +7,7 @@ from modules import scripts, processing, shared
 from scripts import global_state
 from scripts.processor import preprocessor_sliders_config, model_free_preprocessors
 from scripts.logging import logger
+from scripts.enums import HiResFixOption
 
 from modules.api import api
 
@@ -23,6 +24,11 @@ class ControlMode(Enum):
     BALANCED = "Balanced"
     PROMPT = "My prompt is more important"
     CONTROL = "ControlNet is more important"
+
+
+class BatchOption(Enum):
+    DEFAULT = "All ControlNet units for all images in a batch"
+    SEPARATE = "Each ControlNet unit for each image in a batch"
 
 
 class ResizeMode(Enum):
@@ -128,7 +134,7 @@ def pixel_perfect_resolution(
     else:
         estimation = max(k0, k1) * float(min(raw_H, raw_W))
 
-    logger.debug(f"Pixel Perfect Computation:")
+    logger.debug("Pixel Perfect Computation:")
     logger.debug(f"resize_mode = {resize_mode}")
     logger.debug(f"raw_H = {raw_H}")
     logger.debug(f"raw_W = {raw_W}")
@@ -149,10 +155,10 @@ class ControlNetUnit:
     Represents an entire ControlNet processing unit.
     """
     enabled: bool = True
-    module: Optional[str] = None
-    model: Optional[str] = None
+    module: str = "none"
+    model: str = "None"
     weight: float = 1.0
-    image: Optional[InputImage] = None
+    image: Optional[Union[InputImage, List[InputImage]]] = None
     resize_mode: Union[ResizeMode, int, str] = ResizeMode.INNER_FIT
     low_vram: bool = False
     processor_res: int = -1
@@ -162,17 +168,75 @@ class ControlNetUnit:
     guidance_end: float = 1.0
     pixel_perfect: bool = False
     control_mode: Union[ControlMode, int, str] = ControlMode.BALANCED
-    
+    # Whether to crop input image based on A1111 img2img mask. This flag is only used when `inpaint area`
+    # in A1111 is set to `Only masked`. In API, this correspond to `inpaint_full_res = True`.
+    inpaint_crop_input_image: bool = True
+    # If hires fix is enabled in A1111, how should this ControlNet unit be applied.
+    # The value is ignored if the generation is not using hires fix.
+    hr_option: Union[HiResFixOption, int, str] = HiResFixOption.BOTH
+
     # Whether save the detected map of this unit. Setting this option to False prevents saving the
     # detected map or sending detected map along with generated images via API.
     # Currently the option is only accessible in API calls.
     save_detected_map: bool = True
+
+    # Weight for each layer of ControlNet params.
+    # For ControlNet:
+    # - SD1.5: 13 weights (4 encoder block * 3 + 1 middle block)
+    # - SDXL: 10 weights (3 encoder block * 3 + 1 middle block)
+    # For T2IAdapter
+    # - SD1.5: 5 weights (4 encoder block + 1 middle block)
+    # - SDXL: 4 weights (3 encoder block + 1 middle block)
+    # Note1: Setting advanced weighting will disable `soft_injection`, i.e.
+    # It is recommended to set ControlMode = BALANCED when using `advanced_weighting`.
+    # Note2: The field `weight` is still used in some places, e.g. reference_only,
+    # even advanced_weighting is set.
+    advanced_weighting: Optional[List[float]] = None
 
     def __eq__(self, other):
         if not isinstance(other, ControlNetUnit):
             return False
 
         return vars(self) == vars(other)
+
+    def accepts_multiple_inputs(self) -> bool:
+        """This unit can accept multiple input images."""
+        return self.module in (
+            "ip-adapter_clip_sdxl",
+            "ip-adapter_clip_sdxl_plus_vith",
+            "ip-adapter_clip_sd15",
+            "ip-adapter_face_id",
+            "ip-adapter_face_id_plus",
+            "instant_id_face_embedding",
+        )
+
+    @staticmethod
+    def infotext_excluded_fields() -> List[str]:
+        return [
+            "image",
+            "enabled",
+            # Note: "advanced_weighting" is excluded as it is an API-only field.
+            "advanced_weighting",
+            # Note: "inpaint_crop_image" is img2img inpaint only flag, which does not
+            # provide much information when restoring the unit.
+            "inpaint_crop_input_image",
+        ]
+
+    @property
+    def is_animate_diff_batch(self) -> bool:
+        return getattr(self, "animatediff_batch", False)
+
+    @property
+    def uses_clip(self) -> bool:
+        """Whether this unit uses clip preprocessor."""
+        return any((
+            ("ip-adapter" in self.module and "face_id" not in self.module),
+            self.module in ("clip_vision", "revision_clipvision", "revision_ignore_prompt"),
+        ))
+
+    @property
+    def is_inpaint(self) -> bool:
+        return "inpaint" in self.module
 
 
 def to_base64_nparray(encoding: str):
@@ -297,6 +361,10 @@ def to_processing_unit(unit: Union[Dict[str, Any], ControlNetUnit]) -> ControlNe
             mask = unit['mask']
             del unit['mask']
 
+        if "mask_image" in unit:
+            mask = unit["mask_image"]
+            del unit["mask_image"]
+
         if 'image' in unit and not isinstance(unit['image'], dict):
             unit['image'] = {'image': unit['image'], 'mask': mask} if mask is not None else unit['image'] if unit[
                 'image'] else None
@@ -304,7 +372,7 @@ def to_processing_unit(unit: Union[Dict[str, Any], ControlNetUnit]) -> ControlNe
         if 'guess_mode' in unit:
             logger.warning('Guess Mode is removed since 1.1.136. Please use Control Mode instead.')
 
-        unit = ControlNetUnit(**unit)
+        unit = ControlNetUnit(**{k: v for k, v in unit.items() if k in vars(ControlNetUnit).keys()})
 
     # temporary, check #602
     # assert isinstance(unit, ControlNetUnit), f'bad argument to controlnet extension: {unit}\nexpected Union[dict[str, Any], ControlNetUnit]'

@@ -4,6 +4,9 @@ on:
   - push
   - pull_request
 
+env:
+  FORGE_CQ_TEST: "True"
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -48,7 +51,7 @@ jobs:
         uses: actions/cache@v3
         with:
           path: stable-diffusion-webui/extensions/sd-webui-controlnet/models/
-          key: controlnet-models-v2
+          key: controlnet-models-v3
       - name: Cache Preprocessor models
         uses: actions/cache@v3
         with:
@@ -60,6 +63,8 @@ jobs:
             "https://huggingface.co/lllyasviel/ControlNet-v1-1/resolve/main/control_v11p_sd15_canny.pth"
             "https://huggingface.co/h94/IP-Adapter/resolve/main/models/ip-adapter-full-face_sd15.safetensors"
             "https://huggingface.co/h94/IP-Adapter/resolve/main/models/ip-adapter-plus-face_sd15.safetensors"
+            "https://huggingface.co/TencentARC/T2I-Adapter/resolve/main/models/t2iadapter_canny_sd15v2.pth"
+            "https://huggingface.co/comfyanonymous/ControlNet-v1-1_fp16_safetensors/resolve/main/control_lora_rank128_v11p_sd15_canny_fp16.safetensors"
           )
 
           for url in "${urls[@]}"; do

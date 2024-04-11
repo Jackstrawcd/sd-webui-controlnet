@@ -5,9 +5,11 @@ from collections import OrderedDict
 
 from modules import shared, scripts, sd_models
 from modules.paths import models_path
-from scripts.processor import *
+from scripts.processor import *  # noqa: E403
+import scripts.processor as processor
 from scripts.utils import ndarray_lru_cache
 from scripts.logging import logger
+from scripts.enums import StableDiffusionVersion
 
 from typing import Dict, Callable, Optional, Tuple, List
 
@@ -18,28 +20,28 @@ cn_models = OrderedDict()      # "My_Lora(abcd1234)" -> C:/path/to/model.safeten
 cn_models_names = {}  # "my_lora" -> "My_Lora(abcd1234)"
 
 def cache_preprocessors(preprocessor_modules: Dict[str, Callable]) -> Dict[str, Callable]:
-    """ We want to share the preprocessor results in a single big cache, instead of a small 
+    """ We want to share the preprocessor results in a single big cache, instead of a small
      cache for each preprocessor function. """
     CACHE_SIZE = getattr(shared.cmd_opts, "controlnet_preprocessor_cache_size", 0)
 
-    # Set CACHE_SIZE = 0 will completely remove the caching layer. This can be 
+    # Set CACHE_SIZE = 0 will completely remove the caching layer. This can be
     # helpful when debugging preprocessor code.
     if CACHE_SIZE == 0:
         return preprocessor_modules
-    
+
     logger.debug(f'Create LRU cache (max_size={CACHE_SIZE}) for preprocessor results.')
 
     @ndarray_lru_cache(max_size=CACHE_SIZE)
     def unified_preprocessor(preprocessor_name: str, *args, **kwargs):
         logger.debug(f'Calling preprocessor {preprocessor_name} outside of cache.')
         return preprocessor_modules[preprocessor_name](*args, **kwargs)
-    
+
     # TODO: Introduce a seed parameter for shuffle preprocessor?
     uncacheable_preprocessors = ['shuffle']
 
     return {
         k: (
-            v if k in uncacheable_preprocessors 
+            v if k in uncacheable_preprocessors
             else functools.partial(unified_preprocessor, k)
         )
         for k, v
@@ -52,6 +54,8 @@ cn_preprocessor_modules = {
     "depth": midas,
     "depth_leres": functools.partial(leres, boost=False),
     "depth_leres++": functools.partial(leres, boost=True),
+    "depth_hand_refiner": g_hand_refiner_model.run_model,
+    "depth_anything": functools.partial(depth_anything, colored=False),
     "hed": hed,
     "hed_safe": hed_safe,
     "mediapipe_face": mediapipe_face,
@@ -63,12 +67,17 @@ cn_preprocessor_modules = {
     "openpose_faceonly": functools.partial(g_openpose_model.run_model, include_body=False, include_hand=False, include_face=True),
     "openpose_full": functools.partial(g_openpose_model.run_model, include_body=True, include_hand=True, include_face=True),
     "dw_openpose_full": functools.partial(g_openpose_model.run_model, include_body=True, include_hand=True, include_face=True, use_dw_pose=True),
+    "animal_openpose": functools.partial(g_openpose_model.run_model, include_body=True, include_hand=False, include_face=False, use_animal_pose=True),
     "clip_vision": functools.partial(clip, config='clip_vitl'),
     "revision_clipvision": functools.partial(clip, config='clip_g'),
     "revision_ignore_prompt": functools.partial(clip, config='clip_g'),
     "ip-adapter_clip_sd15": functools.partial(clip, config='clip_h'),
     "ip-adapter_clip_sdxl_plus_vith": functools.partial(clip, config='clip_h'),
     "ip-adapter_clip_sdxl": functools.partial(clip, config='clip_g'),
+    "ip-adapter_face_id": g_insight_face_model.run_model,
+    "ip-adapter_face_id_plus": face_id_plus,
+    "instant_id_face_keypoints": functools.partial(g_insight_face_instant_id_model.run_model_instant_id, return_keypoints=True),
+    "instant_id_face_embedding": functools.partial(g_insight_face_instant_id_model.run_model_instant_id, return_keypoints=False),
     "color": color,
     "pidinet": pidinet,
     "pidinet_safe": pidinet_safe,
@@ -101,6 +110,11 @@ cn_preprocessor_modules = {
     "recolor_luminance": recolor_luminance,
     "recolor_intensity": recolor_intensity,
     "blur_gaussian": blur_gaussian,
+    "anime_face_segment": anime_face_segment,
+    "densepose": functools.partial(densepose, cmap="viridis"),
+    "densepose_parula": functools.partial(densepose, cmap="parula"),
+    "te_hed":te_hed,
+    "normal_dsine": normal_dsine,
 }
 
 cn_preprocessor_unloadable = {
@@ -112,9 +126,11 @@ cn_preprocessor_unloadable = {
     "revision_ignore_prompt": functools.partial(unload_clip, config='clip_g'),
     "ip-adapter_clip_sd15": functools.partial(unload_clip, config='clip_h'),
     "ip-adapter_clip_sdxl_plus_vith": functools.partial(unload_clip, config='clip_h'),
+    "ip-adapter_face_id_plus": functools.partial(unload_clip, config='clip_h'),
     "ip-adapter_clip_sdxl": functools.partial(unload_clip, config='clip_g'),
     "depth": unload_midas,
     "depth_leres": unload_leres,
+    "depth_anything": unload_depth_anything,
     "normal_map": unload_midas,
     "pidinet": unload_pidinet,
     "openpose": g_openpose_model.unload,
@@ -122,6 +138,7 @@ cn_preprocessor_unloadable = {
     "openpose_face": g_openpose_model.unload,
     "openpose_full": g_openpose_model.unload,
     "dw_openpose_full": g_openpose_model.unload,
+    "animal_openpose": g_openpose_model.unload,
     "segmentation": unload_uniformer,
     "depth_zoe": unload_zoe_depth,
     "normal_bae": unload_normal_bae,
@@ -131,7 +148,13 @@ cn_preprocessor_unloadable = {
     "lineart_coarse": unload_lineart_coarse,
     "lineart_anime": unload_lineart_anime,
     "lineart_anime_denoise": unload_lineart_anime_denoise,
-    "inpaint_only+lama": unload_lama_inpaint
+    "inpaint_only+lama": unload_lama_inpaint,
+    "anime_face_segment": unload_anime_face_segment,
+    "densepose": unload_densepose,
+    "densepose_parula": unload_densepose,
+    "depth_hand_refiner": g_hand_refiner_model.unload,
+    "te_hed":unload_te_hed,
+    "normal_dsine": unload_normal_dsine,
 }
 
 preprocessor_aliases = {
@@ -152,9 +175,19 @@ preprocessor_aliases = {
     "oneformer_ade20k": "seg_ofade20k",
     "pidinet_scribble": "scribble_pidinet",
     "inpaint": "inpaint_global_harmonious",
+    "anime_face_segment": "seg_anime_face",
+    "densepose": "densepose (pruple bg & purple torso)",
+    "densepose_parula": "densepose_parula (black bg & blue torso)",
+    "te_hed": "softedge_teed",
+    "ip-adapter_clip_sd15": "ip-adapter_clip_h",
+    "ip-adapter_clip_sdxl": "ip-adapter_clip_g",
 }
 
+# Preprocessor that automatically maps to other preprocessors.
+meta_preprocessors = ["ip-adapter-auto"]
+
 ui_preprocessor_keys = ['none', preprocessor_aliases['invert']]
+ui_preprocessor_keys += meta_preprocessors
 ui_preprocessor_keys += sorted([preprocessor_aliases.get(k, k)
                                 for k in cn_preprocessor_modules.keys()
                                 if preprocessor_aliases.get(k, k) not in ui_preprocessor_keys])
@@ -240,35 +273,79 @@ def update_cn_models():
         cn_models_names[name] = name_and_hash
 
 
-def select_control_type(control_type: str) -> Tuple[List[str], List[str], str, str]:
-    default_option = preprocessor_filters[control_type]
+def get_sd_version() -> StableDiffusionVersion:
+    if hasattr(shared.sd_model, 'is_sdxl'):
+        if shared.sd_model.is_sdxl:
+            return StableDiffusionVersion.SDXL
+        elif shared.sd_model.is_sd2:
+            return StableDiffusionVersion.SD2x
+        elif shared.sd_model.is_sd1:
+            return StableDiffusionVersion.SD1x
+        else:
+            return StableDiffusionVersion.UNKNOWN
+
+    # backward compability for webui < 1.5.0
+    else:
+        if hasattr(shared.sd_model, 'conditioner'):
+            return StableDiffusionVersion.SDXL
+        elif hasattr(shared.sd_model.cond_stage_model, 'model'):
+            return StableDiffusionVersion.SD2x
+        else:
+            return StableDiffusionVersion.SD1x
+
+
+
+def select_control_type(
+    control_type: str,
+    sd_version: StableDiffusionVersion = StableDiffusionVersion.UNKNOWN,
+    cn_models: Dict = cn_models, # Override or testing
+) -> Tuple[List[str], List[str], str, str]:
+    default_option = processor.preprocessor_filters[control_type]
     pattern = control_type.lower()
     preprocessor_list = ui_preprocessor_keys
-    model_list = list(cn_models.keys())
+    all_models = list(cn_models.keys())
+
     if pattern == "all":
         return [
             preprocessor_list,
-            model_list,
+            all_models,
             'none', #default option
             "None"  #default model
         ]
     filtered_preprocessor_list = [
         x
         for x in preprocessor_list
-        if pattern in x.lower() or any(a in x.lower() for a in preprocessor_filters_aliases.get(pattern, [])) or x.lower() == "none"
+        if ((
+            pattern in x.lower() or
+            any(a in x.lower() for a in processor.preprocessor_filters_aliases.get(pattern, [])) or
+            x.lower() == "none"
+        ) and (
+            sd_version.is_compatible_with(StableDiffusionVersion.detect_from_model_name(x))
+        ))
     ]
     if pattern in ["canny", "lineart", "scribble/sketch", "mlsd"]:
         filtered_preprocessor_list += [
             x for x in preprocessor_list if "invert" in x.lower()
         ]
+    if pattern in ["sparsectrl"]:
+        filtered_preprocessor_list += [
+            x for x in preprocessor_list if "scribble" in x.lower()
+        ]
     filtered_model_list = [
-        x for x in model_list if pattern in x.lower() or any(a in x.lower() for a in preprocessor_filters_aliases.get(pattern, [])) or x.lower() == "none"
+        model for model in all_models
+        if model.lower() == "none" or
+        ((
+            pattern in model.lower() or
+            any(a in model.lower() for a in processor.preprocessor_filters_aliases.get(pattern, []))
+        ) and (
+            sd_version.is_compatible_with(StableDiffusionVersion.detect_from_model_name(model))
+        ))
     ]
+    assert len(filtered_model_list) > 0, "'None' model should always be available."
     if default_option not in filtered_preprocessor_list:
         default_option = filtered_preprocessor_list[0] if filtered_preprocessor_list else 'none'
     if len(filtered_model_list) == 1:
         default_model = "None"
-        filtered_model_list = model_list
     else:
         default_model = filtered_model_list[1]
         for x in filtered_model_list:

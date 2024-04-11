@@ -2,7 +2,7 @@
 
 The WebUI extension for ControlNet and other injection-based SD controls.
 
-![image](https://github.com/Mikubill/sd-webui-controlnet/assets/19834515/00787fd1-1bc5-4b90-9a23-9683f8458b85)
+![image](https://github.com/Mikubill/sd-webui-controlnet/assets/20929282/51172d20-606b-4b9f-aba5-db2f2417cb0b)
 
 This extension is for AUTOMATIC1111's [Stable Diffusion web UI](https://github.com/AUTOMATIC1111/stable-diffusion-webui), allows the Web UI to add [ControlNet](https://github.com/lllyasviel/ControlNet) to the original Stable Diffusion model to generate images. The addition is on-the-fly, the merging is not required.
 
@@ -19,20 +19,7 @@ This extension is for AUTOMATIC1111's [Stable Diffusion web UI](https://github.c
 9. After you put models in the correct folder, you may need to refresh to see the models. The refresh button is right to your "Model" dropdown.
 
 # Download Models
-
-Right now all the 14 models of ControlNet 1.1 are in the beta test.
-
-Download the models from ControlNet 1.1: https://huggingface.co/lllyasviel/ControlNet-v1-1/tree/main
-
-You need to download model files ending with ".pth" .
-
-Put models in your "stable-diffusion-webui\extensions\sd-webui-controlnet\models". You only need to download "pth" files.
-
-Do not right-click the filenames in HuggingFace website to download. Some users right-clicked those HuggingFace HTML websites and saved those HTML pages as PTH/YAML files. They are not downloading correct files. Instead, please click the small download arrow “↓” icon in HuggingFace to download.
-
-# Download Models for SDXL
-
-See instructions [here](https://github.com/Mikubill/sd-webui-controlnet/discussions/2039).
+You can find all download links here: https://github.com/Mikubill/sd-webui-controlnet/wiki/Model-download.
 
 # Features in ControlNet 1.1
 
@@ -101,7 +88,7 @@ This method is similar to inpaint-based reference but it does not make your imag
 
 Many professional A1111 users know a trick to diffuse image with references by inpaint. For example, if you have a 512x512 image of a dog, and want to generate another 512x512 image with the same dog, some users will connect the 512x512 dog image and a 512x512 blank image into a 1024x512 image, send to inpaint, and mask out the blank 512x512 part to diffuse a dog with similar appearance. However, that method is usually not very satisfying since images are connected and many distortions will appear.
 
-This `reference-only` ControlNet can directly link the attention layers of your SD to any independent images, so that your SD will read arbitary images for reference. You need at least ControlNet 1.1.153 to use it.
+This `reference-only` ControlNet can directly link the attention layers of your SD to any independent images, so that your SD will read arbitrary images for reference. You need at least ControlNet 1.1.153 to use it.
 
 To use, just select `reference-only` as preprocessor and put an image. Your SD will just use the image as reference.
 
@@ -205,7 +192,7 @@ Note that this feature is only available in the gradio user interface. Call the 
 
 This extension can accept txt2img or img2img tasks via API or external extension call. Note that you may need to enable `Allow other scripts to control this extension` in settings for external calls.
 
-To use the API: start WebUI with argument `--api` and go to `http://webui-address/docs` for documents or checkout [examples](https://github.com/Mikubill/sd-webui-controlnet/blob/main/example/api_txt2img.ipynb).
+To use the API: start WebUI with argument `--api` and go to `http://webui-address/docs` for documents or checkout [examples](https://github.com/Mikubill/sd-webui-controlnet/blob/main/example/txt2img_example/api_txt2img.py).
 
 To use external call: Checkout [Wiki](https://github.com/Mikubill/sd-webui-controlnet/wiki/API)
 
@@ -219,6 +206,7 @@ This extension adds these command line arguments to the webui:
     --no-half-controlnet                                                                       load controlnet models in full precision
     --controlnet-preprocessor-cache-size                                                       Cache size for controlnet preprocessor results
     --controlnet-loglevel                                                                      Log level for the controlnet extension
+    --controlnet-tracemalloc                                                                   Enable malloc memory tracing
 ```
 
 # MacOS Support

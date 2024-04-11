@@ -223,6 +223,13 @@
                     if (!this.enabledCheckbox.checked)
                         this.enabledCheckbox.click();
                 });
+
+                // Automatically check `enable` checkbox when JSON pose file is uploaded.
+                this.tab.querySelector('.cnet-upload-pose input').addEventListener('change', (event) => {
+                    if (!event.target.files) return;
+                    if (!this.enabledCheckbox.checked)
+                        this.enabledCheckbox.click();
+                });
             }
 
             attachImageStateChangeObserver() {

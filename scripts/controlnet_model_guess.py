@@ -2,15 +2,20 @@ import copy
 import os
 import torch
 from pathlib import Path
+from typing import NamedTuple
 from modules import devices
 
 from scripts.adapter import PlugableAdapter, Adapter, StyleAdapter, Adapter_light
 from scripts.controlnet_lllite import PlugableControlLLLite
 from scripts.cldm import PlugableControlModel
-from scripts.controlmodel_ipadapter import PlugableIPAdapter
+from scripts.controlnet_sparsectrl import PlugableSparseCtrlModel
+from scripts.ipadapter.ipadapter_model import IPAdapterModel
+from scripts.ipadapter.plugable_ipadapter import PlugableIPAdapter
 from scripts.logging import logger
 from scripts.controlnet_diffusers import convert_from_diffuser_state_dict
 from scripts.controlnet_lora import controlnet_lora_hijack, force_load_state_dict
+from scripts.enums import ControlModelType
+
 
 controlnet_default_config = {'adm_in_channels': None,
                              'in_channels': 4,
@@ -108,11 +113,17 @@ def state_dict_prefix_replace(state_dict, replace_prefix):
     return state_dict
 
 
-def build_model_by_guess(state_dict, unet, model_path):
+class ControlModel(NamedTuple):
+    model: torch.nn.Module
+    type: ControlModelType
+
+
+def build_model_by_guess(state_dict, unet, model_path: str) -> ControlModel:
     if "lora_controlnet" in state_dict:
+        is_sdxl = "input_blocks.11.0.in_layers.0.weight" not in state_dict
+        logger.info(f"Using ControlNet lora ({'SDXL' if is_sdxl else 'SD15'})")
         del state_dict['lora_controlnet']
-        config = copy.deepcopy(controlnet_sdxl_config)
-        logger.info('controlnet_sdxl_config (using lora)')
+        config = copy.deepcopy(controlnet_sdxl_config if is_sdxl else controlnet_default_config)
         config['global_average_pooling'] = False
         config['hint_channels'] = int(state_dict['input_hint_block.0.weight'].shape[1])
         config['use_fp16'] = devices.dtype_unet == torch.float16
@@ -121,7 +132,22 @@ def build_model_by_guess(state_dict, unet, model_path):
         force_load_state_dict(network.control_model, state_dict)
         network.is_control_lora = True
         network.to(devices.dtype_unet)
-        return network
+        return ControlModel(network, ControlModelType.ControlLoRA)
+
+    if "down_blocks.0.motion_modules.0.temporal_transformer.norm.weight" in state_dict: # sparsectrl
+        config = copy.deepcopy(controlnet_default_config)
+        if "input_hint_block.0.weight" in state_dict: # rgb
+            config['use_simplified_condition_embedding'] = True
+            config['conditioning_channels'] = 5
+        else: # scribble
+            config['use_simplified_condition_embedding'] = False
+            config['conditioning_channels'] = 4
+
+        config['use_fp16'] = devices.dtype_unet == torch.float16
+
+        network = PlugableSparseCtrlModel(config, state_dict)
+        network.to(devices.dtype_unet)
+        return ControlModel(network, ControlModelType.SparseCtrl)
 
     if "controlnet_cond_embedding.conv_in.weight" in state_dict:  # diffusers
         state_dict = convert_from_diffuser_state_dict(state_dict)
@@ -199,7 +225,11 @@ def build_model_by_guess(state_dict, unet, model_path):
 
         network = PlugableControlModel(config, state_dict)
         network.to(devices.dtype_unet)
-        return network
+        if "instant_id" in model_path.lower():
+            control_model_type = ControlModelType.InstantID
+        else:
+            control_model_type = ControlModelType.ControlNet
+        return ControlModel(network, control_model_type)
 
     if 'conv_in.weight' in state_dict:
         logger.info('t2i_adapter_config')
@@ -220,7 +250,7 @@ def build_model_by_guess(state_dict, unet, model_path):
         ).cpu()
         adapter.load_state_dict(state_dict, strict=False)
         network = PlugableAdapter(adapter)
-        return network
+        return ControlModel(network, ControlModelType.T2I_Adapter)
 
     if 'style_embedding' in state_dict:
         config = copy.deepcopy(t2i_adapter_style_config)
@@ -228,7 +258,7 @@ def build_model_by_guess(state_dict, unet, model_path):
         adapter = StyleAdapter(**config).cpu()
         adapter.load_state_dict(state_dict, strict=False)
         network = PlugableAdapter(adapter)
-        return network
+        return ControlModel(network, ControlModelType.T2I_StyleAdapter)
 
     if 'body.0.in_conv.weight' in state_dict:
         config = copy.deepcopy(t2i_adapter_light_config)
@@ -237,16 +267,15 @@ def build_model_by_guess(state_dict, unet, model_path):
         adapter = Adapter_light(**config).cpu()
         adapter.load_state_dict(state_dict, strict=False)
         network = PlugableAdapter(adapter)
-        return network
+        return ControlModel(network, ControlModelType.T2I_Adapter)
 
     if 'ip_adapter' in state_dict:
-        network = PlugableIPAdapter(state_dict)
-        network.to('cpu')
-        return network
+        network = PlugableIPAdapter(IPAdapterModel.load(state_dict, model_path))
+        return ControlModel(network, ControlModelType.IPAdapter)
 
     if any('lllite' in k for k in state_dict.keys()):
         network = PlugableControlLLLite(state_dict)
         network.to('cpu')
-        return network
+        return ControlModel(network, ControlModelType.Controlllite)
 
-    raise '[ControlNet Error] Cannot recognize the ControlModel!'
+    raise Exception('[ControlNet Error] Cannot recognize the ControlModel!')

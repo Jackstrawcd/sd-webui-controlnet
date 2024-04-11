@@ -1,26 +1,30 @@
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 from fastapi import FastAPI, Body
 from fastapi.exceptions import HTTPException
+from pydantic import BaseModel
+
 from PIL import Image
 
 import gradio as gr
 
-from modules.api.models import *
+from modules.api.models import *  # noqa:F403
 from modules.api import api
 
 from scripts import external_code, global_state
 from scripts.processor import preprocessor_filters
 from scripts.logging import logger
+from annotator.openpose import draw_poses, decode_json_as_poses
+from annotator.openpose.animalpose import draw_animalposes
 
 
 def encode_to_base64(image):
-    if type(image) is str:
+    if isinstance(image, str):
         return image
-    elif type(image) is Image.Image:
+    elif isinstance(image, Image.Image):
         return api.encode_pil_to_base64(image)
-    elif type(image) is np.ndarray:
+    elif isinstance(image, np.ndarray):
         return encode_np_to_base64(image)
     else:
         return ""
@@ -94,6 +98,7 @@ def controlnet_api(_: gr.Blocks, app: FastAPI):
         ),
         controlnet_threshold_a: float = Body(64, title="Controlnet Threshold a"),
         controlnet_threshold_b: float = Body(64, title="Controlnet Threshold b"),
+        low_vram: bool = Body(False, title="Low vram"),
     ):
         controlnet_module = global_state.reverse_preprocessor_aliases.get(
             controlnet_module, controlnet_module
@@ -133,6 +138,7 @@ def controlnet_api(_: gr.Blocks, app: FastAPI):
                     thr_a=controlnet_threshold_a,
                     thr_b=controlnet_threshold_b,
                     json_pose_callback=json_acceptor.accept,
+                    low_vram=low_vram,
                 )[0]
             )
 
@@ -148,10 +154,44 @@ def controlnet_api(_: gr.Blocks, app: FastAPI):
 
         return res
 
+    class Person(BaseModel):
+        pose_keypoints_2d: List[float]
+        hand_right_keypoints_2d: Optional[List[float]]
+        hand_left_keypoints_2d: Optional[List[float]]
+        face_keypoints_2d: Optional[List[float]]
+
+    class PoseData(BaseModel):
+        people: List[Person]
+        canvas_width: int
+        canvas_height: int
+
+    @app.post("/controlnet/render_openpose_json")
+    async def render_openpose_json(
+        pose_data: List[PoseData] = Body([], title="Pose json files to render.")
+    ):
+        if not pose_data:
+            return {"info": "No pose data detected."}
+        else:
+
+            def draw(poses, animals, H, W):
+                if poses:
+                    assert len(animals) == 0
+                    return draw_poses(poses, H, W)
+                else:
+                    return draw_animalposes(animals, H, W)
+
+            return {
+                "images": [
+                    encode_to_base64(draw(*decode_json_as_poses(pose.dict())))
+                    for pose in pose_data
+                ],
+                "info": "Success",
+            }
+
 
 try:
     import modules.script_callbacks as script_callbacks
 
     script_callbacks.on_app_started(controlnet_api)
-except:
-    pass
+except Exception:
+    logger.warn("Unable to mount ControlNet API.")
