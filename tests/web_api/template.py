@@ -9,6 +9,7 @@ import datetime
 from enum import Enum
 import numpy as np
 import pytest
+from contextlib import contextmanager
 
 import requests
 from PIL import Image
@@ -72,8 +73,11 @@ def read_image_dir(
 girl_img = read_image(resource_dir / "1girl.png")
 mask_img = read_image(resource_dir / "mask.png")
 mask_small_img = read_image(resource_dir / "mask_small.png")
+mask_left = read_image(resource_dir / "mask_left.png")
+mask_right = read_image(resource_dir / "mask_right.png")
 portrait_imgs = read_image_dir(resource_dir / "portrait")
 realistic_girl_face_img = portrait_imgs[0]
+living_room_img = read_image(resource_dir / "living_room.webp")
 
 
 general_negative_prompt = """
@@ -245,6 +249,31 @@ def expect_same_image(img1, img2, diff_img_path: str) -> bool:
     return similar_in_general
 
 
+@contextmanager
+def console_log_context(output_file="output.txt"):
+    log_encoding = "utf-8" if APITestTemplate.is_cq_run else "utf-16"
+    class Context:
+        def __init__(self, output_file) -> None:
+            self.output_file = output_file
+            self.init_line_count = 0
+            with open(self.output_file, "r", encoding=log_encoding) as file:
+                for _ in file:
+                    self.init_line_count += 1
+
+        def is_in_console_logs(self, expected_lines: List[str]) -> bool:
+            with open(self.output_file, "r", encoding=log_encoding) as file:
+                for i, line in enumerate(file):
+                    if not expected_lines:
+                        break
+                    if i < self.init_line_count:
+                        continue
+                    if expected_lines[0] in line:
+                        expected_lines.pop(0)
+            return len(expected_lines) == 0
+
+    yield Context(output_file)
+
+
 def get_model(model_name: str) -> str:
     """Find an available model with specified model name."""
     if model_name.lower() == "none":
@@ -253,7 +282,7 @@ def get_model(model_name: str) -> str:
     r = requests.get(APITestTemplate.BASE_URL + "controlnet/model_list")
     result = r.json()
     if "model_list" not in result:
-        raise ValueError("No model available")
+        raise ValueError(f"No model available\n{result}")
 
     candidates = [
         model for model in result["model_list"] if model_name.lower() in model.lower()
@@ -266,15 +295,15 @@ def get_model(model_name: str) -> str:
 
 
 default_unit = {
-    "control_mode": 0,
+    "control_mode": "Balanced",
     "enabled": True,
     "guidance_end": 1,
     "guidance_start": 0,
     "pixel_perfect": True,
     "processor_res": 512,
-    "resize_mode": 1,
-    "threshold_a": 64,
-    "threshold_b": 64,
+    "resize_mode": "Crop and Resize",
+    "threshold_a": -1,
+    "threshold_b": -1,
     "weight": 1,
     "module": "canny",
     "model": get_model("sd15_canny"),

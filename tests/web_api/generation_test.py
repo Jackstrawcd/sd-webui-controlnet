@@ -2,10 +2,12 @@ import pytest
 
 from .template import (
     APITestTemplate,
+    portrait_imgs,
     girl_img,
     mask_img,
     disable_in_cq,
     get_model,
+    console_log_context,
 )
 
 
@@ -81,13 +83,20 @@ def test_preprocessor(gen_type):
 @pytest.mark.parametrize("param_name", ("processor_res", "threshold_a", "threshold_b"))
 @pytest.mark.parametrize("gen_type", ["img2img", "txt2img"])
 def test_invalid_param(gen_type, param_name):
-    assert APITestTemplate(
-        f"test_invalid_param{(gen_type, param_name)}",
-        gen_type,
-        payload_overrides={},
-        unit_overrides={param_name: -1},
-        input_image=girl_img,
-    ).exec()
+    with console_log_context() as log_context:
+        assert APITestTemplate(
+            f"test_invalid_param{(gen_type, param_name)}",
+            gen_type,
+            payload_overrides={},
+            unit_overrides={param_name: -100},
+            input_image=girl_img,
+        ).exec()
+        number = "-100" if param_name == "processor_res" else "-100.0"
+        assert log_context.is_in_console_logs(
+            [
+                f"[canny.{param_name}] Invalid value({number}), using default value",
+            ]
+        )
 
 
 @pytest.mark.parametrize("save_map", [True, False])
@@ -164,7 +173,7 @@ def test_reference():
             "model": "None",
         },
         input_image=girl_img,
-    ).exec()
+    ).exec(result_only=False)
 
 
 def test_advanced_weighting():
@@ -185,7 +194,7 @@ def test_hr_option():
             "enable_hr": True,
             "denoising_strength": 0.75,
         },
-        unit_overrides={"hr_option": "HiResFixOption.BOTH"},
+        unit_overrides={"hr_option": "Both"},
         input_image=girl_img,
     ).exec(expected_output_num=3)
 
@@ -196,7 +205,7 @@ def test_hr_option_default():
         "test_hr_option_default",
         "txt2img",
         payload_overrides={"enable_hr": False},
-        unit_overrides={"hr_option": "HiResFixOption.BOTH"},
+        unit_overrides={"hr_option": "Both"},
         input_image=girl_img,
     ).exec(expected_output_num=2)
 
@@ -278,5 +287,41 @@ def test_lama_outpaint():
             "model": get_model("v11p_sd15_inpaint"),
             "module": "inpaint_only+lama",
             "resize_mode": "Resize and Fill",  # OUTER_FIT
+        },
+    ).exec(result_only=False)
+
+
+@disable_in_cq
+def test_ip_adapter_auto():
+    with console_log_context() as log_context:
+        assert APITestTemplate(
+            "txt2img_ip_adapter_auto",
+            "txt2img",
+            payload_overrides={},
+            unit_overrides={
+                "image": girl_img,
+                "model": get_model("ip-adapter_sd15"),
+                "module": "ip-adapter-auto",
+            },
+        ).exec()
+
+        assert log_context.is_in_console_logs(["ip-adapter-auto => ip-adapter_clip_h"])
+
+
+@disable_in_cq
+@pytest.mark.parametrize("img_index", [i for i, _ in enumerate(portrait_imgs)])
+def test_pulid(img_index: int):
+    """PuLID should not memory leak."""
+    assert APITestTemplate(
+        f"txt2img_pulid_{img_index}",
+        "txt2img",
+        payload_overrides={
+            "width": 768,
+            "height": 768,
+        },
+        unit_overrides={
+            "image": portrait_imgs[img_index],
+            "model": get_model("ip-adapter_pulid_sdxl_fp16"),
+            "module": "ip-adapter_pulid",
         },
     ).exec()

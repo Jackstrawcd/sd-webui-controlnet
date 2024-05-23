@@ -1,10 +1,22 @@
 # ControlNet for Stable Diffusion WebUI
 
 The WebUI extension for ControlNet and other injection-based SD controls.
-
-![image](https://github.com/Mikubill/sd-webui-controlnet/assets/20929282/51172d20-606b-4b9f-aba5-db2f2417cb0b)
+![image](https://github.com/Mikubill/sd-webui-controlnet/assets/20929282/261f9a50-ba9c-472f-b398-fced61929c4a)
 
 This extension is for AUTOMATIC1111's [Stable Diffusion web UI](https://github.com/AUTOMATIC1111/stable-diffusion-webui), allows the Web UI to add [ControlNet](https://github.com/lllyasviel/ControlNet) to the original Stable Diffusion model to generate images. The addition is on-the-fly, the merging is not required.
+
+# News
+
+- [2024-05-19] 🔥[v1.1.449] Anyline Preprocessor & MistoLine SDXL model [Discussion thread: https://github.com/Mikubill/sd-webui-controlnet/discussions/2907]
+- [2024-05-04] 🔥[v1.1.447] PuLID [Discussion thread: https://github.com/Mikubill/sd-webui-controlnet/discussions/2841]
+- [2024-04-30] 🔥[v1.1.446] Effective region mask supported for ControlNet/IPAdapter [Discussion thread: https://github.com/Mikubill/sd-webui-controlnet/discussions/2831]
+- [2024-04-27] 🔥ControlNet-lllite Normal Dsine released [Discussion thread: https://github.com/Mikubill/sd-webui-controlnet/discussions/2813]
+- [2024-04-19] 🔥[v1.1.445] IPAdapter advanced weight [Instant Style] [Discussion thread: https://github.com/Mikubill/sd-webui-controlnet/discussions/2770]
+- [2024-04-17] 🔥[v1.1.444] Marigold depth preprocessor [Discussion thread: https://github.com/Mikubill/sd-webui-controlnet/discussions/2760]
+- [2024-04-15] 🔥ControlNet++ models released [Discussion thread: https://github.com/Mikubill/sd-webui-controlnet/discussions/2778]
+- [2024-04-13] 🔥TTPLanet_SDXL_Controlnet_Tile_Realistic v2 released [[Civitai Page](https://civitai.com/models/330313/ttplanetsdxlcontrolnettilerealistic)]
+- [2024-03-31] 🔥[v1.1.443] IP-Adapter CLIP mask and ip-adapter-auto preprocessor [Discussion thread: https://github.com/Mikubill/sd-webui-controlnet/discussions/2723]
+- [2024-03-20] 🔥IPAdapter Composition [Discussion thread: https://github.com/Mikubill/sd-webui-controlnet/discussions/2781]
 
 # Installation
 
