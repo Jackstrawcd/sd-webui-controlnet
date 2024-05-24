@@ -409,6 +409,14 @@ class Script(scripts.Script, metaclass=(
 
         return tuple(controls)
 
+    def find_preprocessor(self, name: str):
+        pp = Preprocessor.get_preprocessor(name)
+        if not pp and name.endswith("]"):
+            idx = name.index('[')
+            name = name[: idx].strip()
+            pp = Preprocessor.get_preprocessor(name)
+        return pp
+
     @staticmethod
     def clear_control_model_cache():
         cache_models = Script.cached_models()
